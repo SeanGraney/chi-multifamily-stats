@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest*)",
+      "Bash(uv run rentcomp*)",
+      "Bash(uv sync*)",
+      "Bash(npm run*)",
+      "Bash(npx vitest*)",
+      "Bash(npx playwright*)",
+      "Bash(git status)",
+      "Bash(git diff*)",
+      "Bash(git log*)"
+    ],
+    "deny": [
+      "Read(~/.rentcomp/secrets.json)",
+      "Read(./backend/.env)",
+      "Read(./.env)",
+      "Edit(~/.rentcomp/secrets.json)",
+      "Bash(git push --force*)"
+    ]
+  },
+  "env": {
+    "RENTCOMP_LIVE": "0"
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import json,sys,re; d=json.load(sys.stdin); p=(d.get('tool_input') or {}).get('file_path') or (d.get('tool_response') or {}).get('filePath') or ''; print(json.dumps({'systemMessage': 'Touched stats/pipeline code -> run /test before committing (pytest + vitest + playwright).'})) if re.search(r'/(stats|pipeline)/.*\\.py$', p) else None\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

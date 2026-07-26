@@ -2,6 +2,8 @@
 
 **API call ledger (50/month hard cap):** used 0 · remaining 50 · reserved for gate ≤10 · reserved for owner's real pulls ~40. No live call without a ledger entry (WORKFLOW.md §6).
 
+**Planned spend (owner-authorized 2026-07-26):** gate run for subject `3651 S Wood St, Chicago, IL 60609` (4bd / 1.5ba, 1.0mi radius, window 07-28→08-20, 3 years back) = 3 windows × 2 statuses = **6 calls**. Two-phase execution: 1 call → verify returned `listedDate`s fall inside the requested window → remaining 5 only if windowing holds. Worst case if syntax is wrong: 1 call burned, 5 preserved.
+
 **Deadline: 7/29/2026** — the tool must be able to price a real unit by this date. Working beats pretty; see `PROJECT_MANAGER.md`'s "Deadline awareness."
 
 Owned by the project manager. Every dispatch/completion/reorder is an edit here, committed to main. States: `BLOCKED · READY · DISPATCHED · IN_DEV · IN_REVIEW · REGRESSION · DONE`.
@@ -15,7 +17,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 
 | # | Story | Lane | Blocked by | State | Notes |
 |---|---|---|---|---|---|
-| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **READY** | ~10 live API calls; needs owner's API key; failure ⇒ halt & escalate |
+| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **DISPATCHED** | 6 live calls planned (see ledger); needs owner's API key; failure ⇒ halt & escalate |
 | 1a | F0-S1a backend scaffold (uv, FastAPI, entry point) | INFRA | T-S3 | BLOCKED | |
 | 1b | F0-S1b frontend scaffold (Vite, Tailwind, codegen) | UI | F0-S1a | BLOCKED | needs FastAPI schema for codegen |
 | 2 | F0-S3 weighted stats | PIPE | T-S3 | BLOCKED | pure Python — parallel w/ #1a and #1b |
@@ -68,3 +70,6 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 |---|---|---|
 | — | — | Queue initialized; awaiting gate (#0) |
 | 2026-07-26 | setup | RentCast MCP verified; schema snapshots committed to docs/rentcast-schema/ (schema-read only, 0 ledger spend); QA subagent confirmed unable to call execute-request |
+| 2026-07-26 | T-S3 | Owner authorized gate: subject 3651 S Wood St Chicago 60609, 4bd/1.5ba, 1.0mi, window 07-28→08-20, 3yr — 6 calls planned, two-phase (verify windowing after call #1) |
+| 2026-07-26 | T-S3 | Pre-spend finding: gate.py sends nonexistent daysOldMin/daysOldMax params and comma-joined propertyType; RentCast syntax is `daysOld=min:max` (colon), `\|`-separated multi-values (developers.rentcast.io/reference/search-queries). Fix required before live run — this IS the range-syntax answer F0-S4/F2-S2 inherit |
+| 2026-07-26 | T-S3 | DISPATCHED — QA spawned first per protocol (tests on story/T-S3-qa before any code) |

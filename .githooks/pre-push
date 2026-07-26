@@ -3,6 +3,11 @@
 # Enable once per clone: git config core.hooksPath .githooks
 set -euo pipefail
 
+# Use the project venv's tools (CLAUDE.md "Venv" bullet) — the hook may run
+# from a shell where .venv was never activated.
+repo_root=$(git rev-parse --show-toplevel)
+[ -d "$repo_root/.venv/bin" ] && PATH="$repo_root/.venv/bin:$PATH"
+
 branch=$(git symbolic-ref --short HEAD)
 
 case "$branch" in

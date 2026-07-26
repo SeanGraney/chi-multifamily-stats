@@ -4,7 +4,7 @@ description: Run the full three-layer regression gate (pytest, vitest, playwrigh
 
 Run the full RentComp regression gate, in order, and report a clear pass/fail summary for each layer:
 
-1. `pytest` — from `backend/`, all unit + API-contract tests
+1. `pytest` — from `backend/`, all unit + API-contract tests, using the repo-root `.venv` (activate it or call `.venv/bin/pytest`; see CLAUDE.md's Venv bullet)
 2. `npx vitest run` — from `frontend/`, the `useDerive` hook tests
 3. `npx playwright test` — from `e2e/`, the full accumulated flow-spec suite (fixture mode only — confirm `RENTCOMP_LIVE` is unset before running)
 

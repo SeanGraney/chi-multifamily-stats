@@ -7,6 +7,16 @@ database. This file distills the project's architecture decisions register
 `backend/`, `frontend/`, and `rentcomp-pm/` layout below is the target
 structure, not yet built.
 
+## Where to find things
+
+- Full spec, epics, stories, skill review: `rentcomp-pm/docs/`
+- Architecture decisions D1–D24 (binding): `rentcomp-pm/ARCHITECTURE.md`
+- Git/QA/regression workflow: `rentcomp-pm/WORKFLOW.md`
+- Agent roles: `rentcomp-pm/AGENT_DEVELOPER.md`, `rentcomp-pm/AGENT_QA.md`
+- Live story queue: `rentcomp-pm/QUEUE.md`
+
+Google Drive is a historical snapshot only — never a source of truth. Read docs from the repo.
+
 ## Stack
 
 - **Backend:** Python 3.12, FastAPI, Pydantic, numpy, pip and venv for packaging/venv
@@ -33,7 +43,7 @@ structure, not yet built.
 
 Plus one Vitest file for `useDerive` (debounce/abort/latest-wins timing).
 
-Full gate: `uv run pytest && npx vitest run && npx playwright test` — all three green is the merge condition. Use `/test` (see `.claude/commands/test.md`).
+Full gate: `pytest && npx vitest run && npx playwright test` (inside the activated venv) — all three green is the merge condition. Use `/test` (see `.claude/commands/test.md`).
 
 ## Conventions
 

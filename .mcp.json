@@ -4,6 +4,13 @@
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "RentCastAPI": {
+      "type": "http",
+      "url": "https://developers.rentcast.io/mcp",
+      "headers": {
+        "X-Api-Key": "${RENTCAST_API_KEY}"
+      }
     }
   }
 }

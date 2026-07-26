@@ -1,15 +1,11 @@
 ---
-description: Run the full three-layer regression gate (pytest, Vitest, Playwright)
-allowed-tools: Bash(uv run pytest*), Bash(npx vitest*), Bash(npx playwright*)
+description: Run the full three-layer regression gate (pytest, vitest, playwright)
 ---
 
-Run the project's full test gate, in order, and report results as a punch list:
+Run the full RentComp regression gate, in order, and report a clear pass/fail summary for each layer:
 
-1. `uv run pytest` — backend unit + API-contract tests
-2. `npx vitest run` — `useDerive` hook timing tests
-3. `npx playwright test` — E2E flows (fixture mode, no live API calls)
+1. `pytest` — from `backend/`, all unit + API-contract tests
+2. `npx vitest run` — from `frontend/`, the `useDerive` hook tests
+3. `npx playwright test` — from `e2e/`, the full accumulated flow-spec suite (fixture mode only — confirm `RENTCOMP_LIVE` is unset before running)
 
-Stop and report immediately if a layer fails — don't run later layers past a
-failure unless asked to. For each failure, name the file and the specific
-assertion, not just "tests failed." All three green is the merge condition
-for this project.
+If any layer fails, stop and report which layer, which test(s), and the failure output — don't proceed to the next layer on a red result. All three green is the merge condition (`WORKFLOW.md` §4); this is what QA runs before every merge and what the PM expects in a PASS report's regression line.

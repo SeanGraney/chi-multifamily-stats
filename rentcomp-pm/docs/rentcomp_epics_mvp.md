@@ -86,12 +86,12 @@ HOME ──(new search)──► NEW SEARCH FORM ──(submit)──► [CACHE 
 
 1. For each cohort year: padded `daysOld`-range queries (Active + Inactive), paginated.
 2. Progress indicator: per-year pull → stitching → deriving.
-3. Pipeline: dedupe → group spells by address+unit → stitch gaps ≤21d → derive initial ask, effective DOM, censored flag, cut history, re-list count → window-filter on stitched start → cohort assignment → within-cohort premiums.
+3. Pipeline: dedupe → group spells by address+unit → stitch gaps < 42 days (6 weeks) → derive initial ask, effective DOM, censored flag, cut history, re-list count → classify recent removals (pending: <7d since removal, excluded from stats · provisional: ≥7d, counted with a marker · confirmed: ≥6 weeks with no re-list) → flag withdrawal-suspects (a complete spell that re-lists 6 weeks–6 months later — display-only, lease uncertain, not auto-excluded) → window-filter on stitched start → cohort assignment → within-cohort premiums.
 4. System lands user on Results with all comps **included by default at weight 1** (missing-sqft comps default-excluded, flagged).
 
 **Success:** Comp list where every row's DOM and initial ask are trustworthy; stitched records visibly badged.
 
-**Edges:** 0 comps → empty state naming the binding constraint ("0 in radius; nearest match at 1.3mi") + widen shortcuts. Cohort < min size → warning registered for F9. API error/rate limit → plain error, cache preserved.
+**Edges:** 0 comps → empty state naming the binding constraint ("0 in radius; nearest match at 1.3mi") + widen shortcuts. Cohort < min size → warning registered for F9. API error/rate limit → plain error, cache preserved. A removal <7 days old is not yet counted as leased or vacant ("removed 4d ago — classifying") — this is expected pending-state behavior, not an error.
 
 ---
 

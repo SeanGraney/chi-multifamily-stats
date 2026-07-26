@@ -8,24 +8,34 @@ New dedicated git repository. `main` is protected by convention: nothing lands o
 
 ```
 story/<id>        e.g. story/F4-S3      ← developer branch, cut from latest main
-story/<id>-qa     e.g. story/F4-S3-qa   ← QA branch, cut from story/<id>
+story/<id>-qa     e.g. story/F4-S3-qa   ← QA branch, cut from main directly
 ```
 
-- Developer implements on `story/<id>`.
-- QA writes Playwright specs and test fixtures on `story/<id>-qa`, which is **based on the dev branch** — QA tests real story code, never mocks of it.
+- **QA cuts `story/<id>-qa` from `main` first** — before the developer branch exists — and writes the story's tests there against the story's AC and the agreed API/UI contract. These tests are red; there's nothing to pass yet.
+- Once QA hands off (via the PM), the developer cuts `story/<id>` from `main` and implements.
+- QA then merges `story/<id>` into `story/<id>-qa` for every test run (§4 sync ritual) — this is how QA's branch acquires real code to test against, never mocks of it.
 - Neither branch is long-lived: both exist only for the story's lifecycle.
 
 ## 3. The dev ↔ QA feedback loop
 
+**The PM relays every step below — dev and QA never hand off to each other directly.**
+
 ```
-dev implements → pushes story/<id> → hands off to QA
+QA drafts test-plan table + writes story tests on story/<id>-qa (red)        → PM
+PM sanity-checks the plan, relays to dev                                     → dev
+dev implements on story/<id> until QA's tests pass + writes its own
+  supporting unit tests (usually all L1, most L2)                            → PM
+PM relays to QA
 QA: merge latest story/<id> into story/<id>-qa   ← sync BEFORE every test run
-QA: run story spec (live Playwright) against the story's acceptance criteria + its epic flow
+QA: run story spec (live Playwright + relevant unit tests) against the
+  story's acceptance criteria + its epic flow, evaluating the developer's
+  added tests too — not just whether the suite is green
   PASS → §4 regression gate
-  FAIL → QA writes a feedback report (below) → dev fixes on story/<id> → loop
+  FAIL → QA writes a feedback report (below) → PM relays to dev →
+          dev fixes on story/<id> → PM relays back → loop
 ```
 
-**QA feedback report format** (returned to the developer, cc PM):
+**QA feedback report format** (returned to the PM, who relays to the developer):
 
 ```
 STORY: F4-S3
@@ -50,12 +60,14 @@ TEST PLAN (every AC → layer, per AGENT_QA.md decision procedure):
   AC2  guard state vs curve mutually exclusive → L3  e2e/f11-price-test.spec.ts:22
   AC3  nearest comps + distances surfaced      → L3  e2e/f11-price-test.spec.ts:41
 
+AUTHORED BY: QA (AC2, AC3 — Playwright, written before dev started) /
+             dev (AC1 — supporting unit test, written during implementation)
 BRANCH SYNC: merged origin/story/F11-S3 (2 commits) + origin/main (clean) — results valid
 REGRESSION:  pytest 143 passed · vitest 4 passed · playwright 9 passed
 NOTES: (judgment calls, anything deferred, anything the PM should know)
 ```
 
-The **test plan table is mandatory** — every acceptance criterion appears exactly once with its layer and the test that covers it. Writing it is what forces the layer decision to be made deliberately rather than by habit. A missing AC row, or an L3 row that could have been L2, is grounds for the PM to withhold DONE.
+The **test plan table is mandatory** — every acceptance criterion appears exactly once with its layer and the test that covers it. Writing it is what forces the layer decision to be made deliberately rather than by habit. A missing AC row, or an L3 row that could have been L2, is grounds for the PM to withhold DONE. The PM checks this table **twice**: lightly when QA first hands it off (before dev starts), and rigorously at DONE (after implementation, since tests sometimes evolve during the loop).
 
 ## 4. Sync discipline & the regression gate (the final technical hurdle)
 

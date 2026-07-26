@@ -298,7 +298,7 @@ Cache date, USE CACHED (free) vs REFRESH with real call count, cancel.
 
 **Non-goals (permanent exclusions, not deferrals):** not an automated pricer (tool informs, user decides — by design) · not a rent maximizer (objective is vacancy-adjusted revenue, not peak rent) · not multi-market (Chicago small-multifamily assumptions baked into property types and stitching heuristics) · not multi-user (single-user caching/settings assumed throughout) · no amenity modeling at this sample size, ever (eyes + weights, permanently).
 
-**Deadline anchor:** the tool must price a real unit before the next vacancy lists — *date TBD by owner; write it here and let it drive scope cuts.* A working pipeline with an ugly UI prices a unit; a polished UI with an unverified stitcher doesn't.
+**Deadline anchor: 7/29/2026.** The tool must be able to price a real unit by this date. **Working beats pretty, without exception, for this build.** If 7/29 arrives before V1 is complete, the bar drops to whatever's furthest along the pipeline end-to-end — an ugly-but-complete walking skeleton that can actually price a unit beats a polished screen sitting on an unverified stitcher. This is not a fallback to feel bad about; it's the intended reading of the build order in §9 under time pressure. The PM tracks progress against this date (see `PROJECT_MANAGER.md`'s "MVP exit gate" and "Deadline awareness") and reports status rather than silently grinding on polish if the date arrives first.
 
 ---
 
@@ -312,4 +312,4 @@ Cache date, USE CACHED (free) vs REFRESH with real call count, cancel.
 
 **V2:** automatic drift sources (zip index + cohort ratio) · per-bucket mini-KM sparklines · RentCast AVM benchmark · AFT overlay · two-candidate comparison · per-cohort drift auto-validation · CSV export of cleaned comp set · second-unit side-by-side.
 
-Open items: exact numeric-range syntax for `daysOld`/`bedrooms` params (verify against RentCast docs on first call) · §3.4 verification items · Zillow deep-link format · deadline date (owner).
+Open items: exact numeric-range syntax for `daysOld`/`bedrooms` params (verify against RentCast docs on first call) · §3.4 verification items · Zillow deep-link format.

@@ -24,7 +24,7 @@ Google Drive is a historical snapshot only — never a source of truth. Read doc
 ## Stack
 
 - **Backend:** Python 3.12, FastAPI, Pydantic, numpy, pip and venv for packaging/venv
-- **Venv:** `.venv/` at repo root (gitignored) is the project's **only** Python environment — every `pip`, `pytest`, and `rentcomp` invocation runs inside it (`source .venv/bin/activate.fish`, or call `.venv/bin/<tool>` directly; never system pip). Bootstrap state: created on Python 3.10 with only `httpx`, just enough to run `scripts/gate.py` (T-S3) before the backend exists. F0-S1a recreates it on Python 3.12 with the full backend install (`pip install -e .`) — 3.12 must be installed on this machine first. Never create a second/parallel venv.
+- **Venv:** `.venv/` at repo root (gitignored) is the project's **only** Python environment — every `pip`, `pytest`, and `rentcomp` invocation runs inside it (`source .venv/bin/activate.fish`, or call `.venv/bin/<tool>` directly; never system pip). It already runs Python 3.12 with `httpx` installed (enough for `scripts/gate.py`/T-S3); F0-S1a installs the full backend into it with `pip install -e .` — don't recreate it, and never create a second/parallel venv.
 - **Frontend:** Vite + React 18 + TypeScript + Tailwind
 - **Launch:** `pip install -e .` once, then `rentcomp` (console script, D7) — serves the API and the built UI together on `localhost:8000`
 - **Types:** OpenAPI → TypeScript codegen (`openapi-typescript`), committed — never hand-edit generated types

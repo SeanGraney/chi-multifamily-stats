@@ -1,9 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv run pytest*)",
-      "Bash(uv run rentcomp*)",
-      "Bash(uv sync*)",
+      "Bash(pytest*)",
+      "Bash(rentcomp*)",
+      "Bash(pip install*)",
       "Bash(npm run*)",
       "Bash(npx vitest*)",
       "Bash(npx playwright*)",

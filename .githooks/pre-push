@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# .githooks/pre-push — runs the affected story's tests before allowing a push.
+# Enable once per clone: git config core.hooksPath .githooks
+set -euo pipefail
+
+branch=$(git symbolic-ref --short HEAD)
+
+case "$branch" in
+  story/*-qa)
+    story_id=$(echo "$branch" | sed -E 's#^story/(.*)-qa$#\1#')
+    echo "[pre-push] QA branch for $story_id — running full regression gate"
+    echo "[pre-push] (courtesy check only — WORKFLOW.md §4's sync+full-suite ritual on a freshly-synced branch is the real gate)"
+    pytest && npx vitest run && npx playwright test
+    ;;
+  story/*)
+    story_id=$(echo "$branch" | sed -E 's#^story/(.*)$#\1#')
+    echo "[pre-push] Dev branch for $story_id — running pytest only (fast feedback; QA's branch runs the full suite)"
+    pytest
+    ;;
+  *)
+    echo "[pre-push] Not a story branch ($branch) — skipping."
+    ;;
+esac

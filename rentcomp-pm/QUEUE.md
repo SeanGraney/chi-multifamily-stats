@@ -2,7 +2,9 @@
 
 **API call ledger (50/month hard cap):** used 0 · remaining 50 · reserved for gate ≤10 · reserved for owner's real pulls ~40. No live call without a ledger entry (WORKFLOW.md §6).
 
-Owned by the project manager. Every dispatch/completion/reorder is an edit here, committed to main. States: `BLOCKED · READY · DISPATCHED · IN_REVIEW · REGRESSION · DONE`.
+**Deadline: 7/29/2026** — the tool must be able to price a real unit by this date. Working beats pretty; see `PROJECT_MANAGER.md`'s "Deadline awareness."
+
+Owned by the project manager. Every dispatch/completion/reorder is an edit here, committed to main. States: `BLOCKED · READY · DISPATCHED · IN_DEV · IN_REVIEW · REGRESSION · DONE`.
 
 **Global rule:** everything is blocked by `T-S3` (the go/no-go gate) until it passes. `F4-S7` (harness) is built *as part of* the gate. `T-S4` (Playwright specs) is not a queue item — it rides inside every story's QA work. `T-S1` (golden files) rides with `F4-S3`.
 
@@ -14,7 +16,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | # | Story | Lane | Blocked by | State | Notes |
 |---|---|---|---|---|---|
 | 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **READY** | ~10 live API calls; needs owner's API key; failure ⇒ halt & escalate |
-| 1a | F0-S1a backend scaffold (pip, venv, FastAPI, entry point) | INFRA | T-S3 | BLOCKED | |
+| 1a | F0-S1a backend scaffold (uv, FastAPI, entry point) | INFRA | T-S3 | BLOCKED | |
 | 1b | F0-S1b frontend scaffold (Vite, Tailwind, codegen) | UI | F0-S1a | BLOCKED | needs FastAPI schema for codegen |
 | 2 | F0-S3 weighted stats | PIPE | T-S3 | BLOCKED | pure Python — parallel w/ #1a and #1b |
 | 3 | F0-S4 RentCast client | INFRA | T-S3 | BLOCKED | encodes range-syntax answer from gate |

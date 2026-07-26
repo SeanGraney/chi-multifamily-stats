@@ -21,7 +21,7 @@ Google Drive is a historical snapshot only — never a source of truth. Read doc
 
 - **Backend:** Python 3.12, FastAPI, Pydantic, numpy, pip and venv for packaging/venv
 - **Frontend:** Vite + React 18 + TypeScript + Tailwind
-- **Launch:** TODO (API + built UI, one command)
+- **Launch:** One command — `rentcomp` (console script, after `pip install -e .`) → `localhost:8000` serving API + built UI
 - **Types:** OpenAPI → TypeScript codegen (`openapi-typescript`), committed — never hand-edit generated types
 - **Storage:** `~/.rentcomp/` (config, secrets, cache, workspaces, decisions) — no database
 

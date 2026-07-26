@@ -67,3 +67,4 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | Date | Story | Event |
 |---|---|---|
 | — | — | Queue initialized; awaiting gate (#0) |
+| 2026-07-26 | setup | RentCast MCP verified; schema snapshots committed to docs/rentcast-schema/ (schema-read only, 0 ledger spend); QA subagent confirmed unable to call execute-request |

@@ -17,7 +17,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 
 | # | Story | Lane | Blocked by | State | Notes |
 |---|---|---|---|---|---|
-| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **DISPATCHED** | 6 live calls planned (see ledger); needs owner's API key; failure ⇒ halt & escalate |
+| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **IN_DEV** | 6 live calls planned (see ledger); needs owner's API key; failure ⇒ halt & escalate |
 | 1a | F0-S1a backend scaffold (uv, FastAPI, entry point) | INFRA | T-S3 | BLOCKED | |
 | 1b | F0-S1b frontend scaffold (Vite, Tailwind, codegen) | UI | F0-S1a | BLOCKED | needs FastAPI schema for codegen |
 | 2 | F0-S3 weighted stats | PIPE | T-S3 | BLOCKED | pure Python — parallel w/ #1a and #1b |
@@ -73,3 +73,4 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 2026-07-26 | T-S3 | Owner authorized gate: subject 3651 S Wood St Chicago 60609, 4bd/1.5ba, 1.0mi, window 07-28→08-20, 3yr — 6 calls planned, two-phase (verify windowing after call #1) |
 | 2026-07-26 | T-S3 | Pre-spend finding: gate.py sends nonexistent daysOldMin/daysOldMax params and comma-joined propertyType; RentCast syntax is `daysOld=min:max` (colon), `\|`-separated multi-values (developers.rentcast.io/reference/search-queries). Fix required before live run — this IS the range-syntax answer F0-S4/F2-S2 inherit |
 | 2026-07-26 | T-S3 | DISPATCHED — QA spawned first per protocol (tests on story/T-S3-qa before any code) |
+| 2026-07-26 | T-S3 | QA handoff accepted: 18 tests on story/T-S3-qa @ f0c3fe7 (9 red = defects, 9 green = D24 pins); plan table complete, all L1, no-Playwright deviation approved. PM accepted QA judgment: ±90 boundaries inclusive; missing listedDate ⇒ verdict not ok. → IN_DEV |

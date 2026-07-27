@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-__all__ = ["contribution_pcts", "effective_weights"]
+__all__ = ["contribution_shares", "effective_weights"]
 
 #: A comp with no $/sqft contributes to no $/sqft statistic, so it starts at 0.
 DEFAULT_WEIGHT_NO_SQFT = 0.0
@@ -53,7 +53,7 @@ def effective_weights(
     ]
 
 
-def contribution_pcts(
+def contribution_shares(
     weights: Sequence[float], included: Sequence[bool]
 ) -> list[float | None]:
     """Each included comp's share of the total included weight (F5-S2).

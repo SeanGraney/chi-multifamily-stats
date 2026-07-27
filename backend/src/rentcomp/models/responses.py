@@ -153,7 +153,15 @@ class DerivedComp(BaseModel):
     weight: float
     #: weight ÷ Σ weights of included comps. Computed server-side (D5): the
     #: view must never divide one payload field by another.
-    contribution_pct: float | None
+    #:
+    #: A **ratio in [0, 1]**, not percentage points — `0.25` means 25%. Named
+    #: `_share` rather than `_pct` (PM ruling 2026-07-27) precisely because
+    #: `_pct` means percentage POINTS everywhere else in this codebase
+    #: (`bucket_half_width_pct`, `drift_pct`), and this name codegens straight
+    #: into the TypeScript F5-S2's "amber above 40%" row is written against —
+    #: where `contribution_pct > 40` would have looked correct and been wrong
+    #: by 100x.
+    contribution_share: float | None
     state: Literal["included", "excluded", "filtered"]
     bucket: BucketId | None
 

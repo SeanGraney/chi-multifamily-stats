@@ -65,7 +65,7 @@ from rentcomp.pipeline.keys import comp_key
 from rentcomp.pipeline.membership import classify_membership, distances_mi
 from rentcomp.pipeline.premium import compute_premiums
 from rentcomp.pipeline.pricetest import price_test
-from rentcomp.pipeline.weights import contribution_pcts, effective_weights
+from rentcomp.pipeline.weights import contribution_shares, effective_weights
 from rentcomp.storage.config import Config
 
 __all__ = [
@@ -155,7 +155,7 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
         cfg.bucket_half_width_pct,
     )
 
-    contributions = contribution_pcts(weights, included)
+    contributions = contribution_shares(weights, included)
     derived_comps = [
         _derived_comp(comp, key, psf, premium, bucket, distance, weight, share, state)
         for comp, key, psf, premium, bucket, distance, weight, share, state in zip(
@@ -233,7 +233,7 @@ def _derived_comp(
         gap_days=comp.gap_days,
         distance_mi=distance,
         weight=weight,
-        contribution_pct=share,
+        contribution_share=share,
         state=state,
         bucket=bucket,
     )

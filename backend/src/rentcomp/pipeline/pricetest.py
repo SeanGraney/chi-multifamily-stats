@@ -34,22 +34,33 @@ from rentcomp.stats.knn import select_neighbors
 
 __all__ = ["candidate_premium_band", "price_test"]
 
-#: PLACEHOLDER RULE (F0-S2 → replaced by F11-S3 for the decision, F11-S2 for
-#: the curve): the price test always returns the **guard** branch, with reason
-#: `too_few_in_range` and an empty neighbour list.
+#: F11-S3 [DEFAULT] threshold: "within ±3 premium points of candidate",
+#: expressed in `Neighbor.distance`'s own units (premium is a ratio, e.g.
+#: 0.04 == 4%, so 3 points == 0.03).
+IN_RANGE_DISTANCE = 0.03
+
+#: F11-S3 [DEFAULT] threshold: fewer than this many usable, in-range
+#: neighbors is "too few".
+MIN_USABLE_IN_RANGE = 3
+
+#: WS-1a (architecture checkpoint 2, QUEUE.md row 6a): `CurveResult` is never
+#: constructed here — F11-S2 (the Kaplan-Meier curve) does not exist yet, so
+#: `price_test` always returns the **guard** branch. That much is unchanged
+#: from F0-S2. What changed: the guard's `reason` is now computed from what
+#: retrieval actually found (`_guard_reason` below), not hardcoded — WS-1
+#: made `select_neighbors` real, so a hardcoded reason is no longer honest
+#: (the real derive can and does retrieve real, in-range, uncensored
+#: neighbours; reporting "too few" regardless would be a stated reason with
+#: no evidence behind it, exactly what NORTH_STAR forbids).
 #:
-#: This is not a fabricated verdict — it is the true one given the rest of the
-#: pipeline: `stats/knn.select_neighbors` is itself a stub that retrieves
-#: nothing, so there are genuinely zero usable neighbours, which is genuinely
-#: "too few in range". The alternative — synthesising a curve — would put a
-#: survival probability and an expected-vacancy figure on screen with no
-#: evidence behind them, which is the one thing NORTH_STAR says this tool must
-#: never do.
-#:
-#: `CurveResult` is therefore never constructed in F0-S2. It exists in the
-#: contract (and in the OpenAPI document, so D12's codegen emits both arms of
-#: the union) and F11-S2 fills it in.
-_STUB_GUARD_DECISION = True
+#: `CurveResult` is still never built. It exists in the contract (and in the
+#: OpenAPI document, so D12's codegen emits both arms of the union) and
+#: F11-S2 fills it in. When F11-S3's own real trip rule does not actually
+#: fire (>= 3 usable in-range neighbours, not all censored) there is
+#: currently nowhere honest to land that in the wire contract short of
+#: inventing a curve — `reason="curve_not_available"` names that gap
+#: explicitly (PM ruling, WS-1a dispatch) rather than silently claiming
+#: `too_few_in_range` when there are plenty.
 
 
 def candidate_premium_band(candidate_rent: float, anchor_value: Anchor) -> Band[float]:
@@ -118,16 +129,34 @@ def price_test(
     # always has one here, so the fallback below is unreachable.
     bucket = bucket_of(premium_band.mid, half_width_pct) or "at"
 
-    # _STUB_GUARD_DECISION (F11-S3 decides; F11-S2 builds the curve).
     return GuardResult(
         candidate_rent=candidate_rent,
         candidate_premium=premium_band,
         bucket=bucket,
-        reason="all_censored"
-        if neighbors and all(neighbor.censored for neighbor in neighbors)
-        else "too_few_in_range",
+        reason=_guard_reason(neighbors),
         neighbors=neighbors,
     )
+
+
+def _guard_reason(neighbors: Sequence[Neighbor]) -> str:
+    """F11-S3's real trip rule, named honestly (WS-1a).
+
+    Priority mirrors F0-S2's original ordering: "all k censored" trips the
+    guard regardless of how many are in range (an all-censored neighbour set
+    has no leased outcome to build a curve from no matter how close those
+    neighbours are), so it is checked first. Otherwise the guard trips iff
+    fewer than `MIN_USABLE_IN_RANGE` retrieved neighbours are within
+    `IN_RANGE_DISTANCE` of the candidate. When NEITHER real trip condition
+    holds, F11-S3 says the guard should not trip at all — but there is still
+    no `CurveResult` to return (F11-S2 out of scope), so that state is named
+    rather than mislabelled as one of the two real trip reasons.
+    """
+    if neighbors and all(neighbor.censored for neighbor in neighbors):
+        return "all_censored"
+    in_range = sum(1 for neighbor in neighbors if neighbor.distance <= IN_RANGE_DISTANCE)
+    if in_range < MIN_USABLE_IN_RANGE:
+        return "too_few_in_range"
+    return "curve_not_available"
 
 
 def _neighbor(

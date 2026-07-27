@@ -83,6 +83,13 @@ class StitchedComp(BaseModel):
 
     # --- shaping flags -------------------------------------------------------
     cohort_year: int
+    #: The chain's stitched-start date (F4-S3's `chain[0].listed`) — carried
+    #: here (WS-1a) so `pipeline.keys.disambiguate_keys` can tell two disjoint
+    #: chains at the same address+unit apart even when `cohort_year` collides
+    #: (real data: 7 of 34 colliding groups share a cohort year). `None` only
+    #: for hand-built `StitchedComp`s in tests that construct one directly
+    #: without going through `shape_raw_pull` — real shaping always sets it.
+    first_listed: date | None = None
     withdrawal_suspect: bool = False
     #: $/sqft >30% off the cohort median (F5-S1 computes it; carried here so
     #: the graph can surface it without re-deriving it per request).

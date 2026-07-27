@@ -473,7 +473,7 @@ export interface components {
        * Reason
        * @enum {string}
        */
-      reason: "too_few_in_range" | "all_censored";
+      reason: "too_few_in_range" | "all_censored" | "curve_not_available";
       /** Neighbors */
       neighbors: components["schemas"]["Neighbor"][];
     };

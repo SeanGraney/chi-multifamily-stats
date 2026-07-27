@@ -318,6 +318,61 @@ def test_a_capped_pull_names_the_gap_instead_of_pretending_to_be_whole(live_clie
     assert len(result.records) == 500, "the records already paid for are kept, not discarded"
 
 
+def unbounded(page_size: int = 500):
+    """A server that returns full pages forever and never echoes
+    `X-Total-Count` — the state in which the size of the gap is unknowable."""
+
+    def responder(request: httpx.Request, index: int) -> httpx.Response:
+        offset = int(request.url.params.get("offset") or 0)
+        return httpx.Response(200, json=records(page_size, offset=offset))
+
+    return responder
+
+
+@needs_client
+@needs_ledger
+@pytest.mark.parametrize("stop", ["max-calls", "monthly-cap"])
+def test_a_pull_stopped_early_with_no_total_count_is_never_reported_complete(
+    live_client, home: Path, stop: str
+) -> None:
+    """`complete` is authoritative over `missing` — the case where they
+    disagree.
+
+    A full page came back and the server echoed no `X-Total-Count`, so the pull
+    was stopped by the budget short by an amount nobody can name. `missing`
+    has no honest value to report here and is 0; if `complete` were derived
+    from `missing` (or from "did we reach the total we know about"), the result
+    would read as "this is the whole market" — the one thing spec §7 forbids,
+    and the exact reading every downstream count in F4/F5 would be computed on.
+
+    Both stop causes are asserted because they are different branches that must
+    reach the same conclusion: the caller's `max_calls` and the month's cap.
+
+    Regression origin: QA verify pass on F0-S4 (2026-07-27). Removing the
+    `not stopped_early` term from the `complete` expression passed all 568
+    existing tests — this is the spec that holds it.
+    """
+    if stop == "max-calls":
+        client, recorder = live_client(unbounded())
+        result = client.fetch_listings(dict(QUERY), max_calls=1)
+    else:
+        seed_ledger(home, MONTHLY_CALL_CAP - 1)
+        client, recorder = live_client(unbounded())
+        result = client.fetch_listings(dict(QUERY))
+
+    assert len(recorder.requests) == 1
+    assert result.fetched == 500, "the page already paid for is kept"
+    assert result.total_count is None, "the server named no total — nothing may invent one"
+    assert result.complete is False, (
+        "a budget-stopped pull with no X-Total-Count reported itself COMPLETE. It is short by "
+        "an unnameable amount; `complete` is the authoritative signal precisely because "
+        "`missing` cannot be computed here"
+    )
+    assert result.missing == 0, (
+        "missing must not guess — an invented gap size is worse than a named unknown"
+    )
+
+
 # ---------------------------------------------------------------------------
 # 401 vs 429 (spec §7 — distinct, plain, never partial)
 # ---------------------------------------------------------------------------

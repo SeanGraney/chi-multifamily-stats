@@ -125,6 +125,16 @@ def test_out_of_range_file_error_names_the_offending_knob(home: Path) -> None:
     assert "knn_k" in message and "config.json" in message
 
 
+def test_non_utf8_config_file_raises_config_error(home: Path) -> None:
+    """A binary/mis-encoded file is a file problem, not a caller bug —
+    `UnicodeDecodeError` is a `ValueError`, so it has to be converted or it
+    would land in the wrong handler (and P2's distinction would leak)."""
+    (home / "config.json").write_bytes(b'{"knn_k": 7, "note": "\xff\xfe"}')
+    with pytest.raises(ConfigError) as excinfo:
+        load_config()
+    assert "config.json" in str(excinfo.value)
+
+
 def test_unreadable_config_path_raises_config_error(home: Path) -> None:
     """A `config.json` that is a directory (or otherwise unopenable) is an
     OSError, not a JSON error — it must still surface as ConfigError rather

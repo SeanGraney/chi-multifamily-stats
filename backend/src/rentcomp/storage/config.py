@@ -171,7 +171,12 @@ def load_config() -> Config:
         # First run: no file (and possibly no home directory) is the normal
         # state, not an error.
         return Config()
-    except OSError as exc:  # unreadable, a directory, bad permissions, ...
+    except (OSError, UnicodeDecodeError) as exc:
+        # Unreadable for any reason the user has to go look at: permissions, a
+        # directory where the file should be, or bytes that are not UTF-8 at
+        # all. UnicodeDecodeError is a ValueError, so without catching it here
+        # a binary config.json would surface as a caller bug rather than as
+        # the file problem it is.
         raise ConfigError(f"cannot read config file {path}: {exc}") from exc
 
     try:

@@ -1,0 +1,15 @@
+{
+  "name": "rentcomp-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Playwright regression suite (D22) — one spec set per flow, plus F0-S1b's scaffold checks. Written by QA ahead of the frontend implementation (AGENT_QA.md protocol step 3).",
+  "scripts": {
+    "test": "playwright test",
+    "test:structural": "playwright test tests/f0-s1b-scaffold-exists.spec.ts tests/f0-s1b-structural.spec.ts",
+    "test:integration": "playwright test tests/f0-s1b-integration.spec.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.1",
+    "typescript": "^5.4.5"
+  }
+}

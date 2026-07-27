@@ -43,7 +43,7 @@ from rentcomp.pipeline.keys import comp_key
 from rentcomp.pipeline.membership import classify_membership, distances_mi, haversine_miles
 from rentcomp.pipeline.premium import compute_premiums
 from rentcomp.pipeline.pricetest import candidate_premium_band, price_test
-from rentcomp.pipeline.weights import contribution_pcts, effective_weights
+from rentcomp.pipeline.weights import contribution_shares, effective_weights
 from rentcomp.stats.knn import select_neighbors
 from rentcomp.storage.config import Config
 
@@ -133,14 +133,14 @@ def test_weights_do_not_depend_on_the_clients_json_key_order() -> None:
 
 
 def test_contribution_shares_sum_to_one_over_the_included_set() -> None:
-    shares = contribution_pcts([1.0, 3.0, 5.0], [True, True, False])
+    shares = contribution_shares([1.0, 3.0, 5.0], [True, True, False])
     assert shares[2] is None, "a comp that is not contributing has an undefined share, not 0%"
     assert sum(share for share in shares if share is not None) == pytest.approx(1.0)
     assert shares[1] == pytest.approx(0.75)
 
 
 def test_no_included_weight_means_no_shares_rather_than_a_division_by_zero() -> None:
-    assert contribution_pcts([0.0, 0.0], [True, True]) == [None, None]
+    assert contribution_shares([0.0, 0.0], [True, True]) == [None, None]
 
 
 # ---------------------------------------------------------------------------

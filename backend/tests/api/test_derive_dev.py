@@ -165,19 +165,19 @@ def test_the_placeholder_anchor_is_the_sentinel_not_a_market_estimate(derived) -
 def test_contribution_shares_are_computed_server_side_and_sum_to_one(derive) -> None:
     """D5: the view must never divide one payload field by another."""
     payload = derive().json()
-    shares = [c["contribution_pct"] for c in payload["comps"] if c["state"] == "included"]
+    shares = [c["contribution_share"] for c in payload["comps"] if c["state"] == "included"]
     assert shares and all(share is not None for share in shares)
     assert sum(shares) == pytest.approx(1.0)
     assert all(
-        c["contribution_pct"] is None for c in payload["comps"] if c["state"] != "included"
+        c["contribution_share"] is None for c in payload["comps"] if c["state"] != "included"
     )
 
 
 def test_a_heavier_weight_earns_a_larger_share(derive, derived) -> None:
     key = next(c["key"] for c in derived["comps"] if c["state"] == "included")
-    baseline = next(c for c in derived["comps"] if c["key"] == key)["contribution_pct"]
+    baseline = next(c for c in derived["comps"] if c["key"] == key)["contribution_share"]
     heavier = derive(weights={key: 3.0}).json()
-    assert next(c for c in heavier["comps"] if c["key"] == key)["contribution_pct"] > baseline
+    assert next(c for c in heavier["comps"] if c["key"] == key)["contribution_share"] > baseline
 
 
 def test_an_include_override_survives_a_filter(derive, derived) -> None:

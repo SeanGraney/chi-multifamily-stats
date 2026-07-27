@@ -41,7 +41,18 @@ def test_an_unknown_pull_ref_names_the_ref_and_not_the_filesystem(derive) -> Non
 
 
 @pytest.mark.parametrize(
-    "ref", ["../../../etc/passwd", "..", ".hidden", "sub/dir", "", "synthetic-basic/../x"]
+    "ref",
+    [
+        "../../../etc/passwd",
+        "..",
+        ".hidden",
+        "sub/dir",
+        "",
+        "synthetic-basic/../x",
+        "synthetic\x00basic",
+        "sub\\dir",
+        "~/secrets",
+    ],
 )
 def test_a_pull_ref_cannot_escape_the_pull_store(derive, ref: str) -> None:
     """`pull_ref` arrives from a request body, so path traversal is something a
@@ -71,6 +82,23 @@ def test_curation_that_cannot_mean_anything_is_rejected_not_absorbed(derive, ove
 
 def test_a_missing_body_is_a_422_not_a_500(derive_client, derive_path) -> None:
     assert derive_client.post(derive_path, json={}).status_code == 422
+
+
+def test_a_corrupt_config_file_names_the_file_instead_of_failing_opaquely(
+    derive, rentcomp_home, clear_caches
+) -> None:
+    """F0-S5 already refuses to silently fall back to defaults when
+    `config.json` is unusable — a user's tuned 30-day stitch gap quietly
+    becoming 42 would move every downstream number with no signal. The edge
+    must carry that message out rather than turning it into a blank 500."""
+    (rentcomp_home / "config.json").write_text("{not json", encoding="utf-8")
+    clear_caches()
+
+    response = derive()
+    assert response.status_code == 500
+    assert "config.json" in json.dumps(response.json()), (
+        "the derive failed because of the config file and did not say which file"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +256,27 @@ def test_the_record_shaping_memo_is_a_pure_function_cache(rentcomp_home) -> None
     load_shaped_pull.cache_clear()
     assert load_shaped_pull("synthetic-basic", Config()) is not first
     assert load_shaped_pull("synthetic-basic", Config()) == first
+
+
+def test_the_memo_notices_the_pull_store_moving(tmp_path, monkeypatch) -> None:
+    """The store root is resolved per call and is part of the memo key: an E2E
+    harness points it at a temp directory *after* this module was imported, and
+    a memo keyed only on the ref would keep serving the pull from wherever the
+    process first looked."""
+    from rentcomp.storage.config import Config
+    from rentcomp.storage.pulls import PullNotFoundError, load_shaped_pull
+
+    load_shaped_pull.cache_clear()
+    real = load_shaped_pull("synthetic-basic", Config())
+
+    empty = tmp_path / "elsewhere"
+    empty.mkdir()
+    monkeypatch.setenv("RENTCOMP_FIXTURE_PULLS_DIR", str(empty))
+    with pytest.raises(PullNotFoundError):
+        load_shaped_pull("synthetic-basic", Config())
+
+    monkeypatch.delenv("RENTCOMP_FIXTURE_PULLS_DIR")
+    assert load_shaped_pull("synthetic-basic", Config()) == real
 
 
 def test_an_absent_pull_raises_rather_than_returning_an_empty_market() -> None:

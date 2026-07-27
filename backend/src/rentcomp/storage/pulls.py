@@ -119,24 +119,35 @@ def fixture_pulls_dir() -> Path:
     return Path(__file__).resolve().parents[4] / "fixtures" / "synthetic" / "pulls"
 
 
-@lru_cache(maxsize=4)
 def load_shaped_pull(pull_ref: str, config: Config) -> ShapedPull:
     """Resolve `pull_ref` to shaped comps. Raises `PullNotFoundError` if absent.
 
     Memoized per ADR-001 §3 (~4 workspaces). The ADR's key is
-    `(pull_ref, pull_digest, config, as_of)`; this uses `(pull_ref, config)`
-    because the digest and the fetch date are *functions of the file at that
-    ref*, and `cache/` is immutable raw responses by construction
-    (ARCHITECTURE.md §5) — a refresh writes a new ref, it never rewrites one.
-    Logged as a [DEFAULT] deviation in the F0-S2 handoff. `config` stays in the
-    key deliberately: F0-S5's load-bearing clause is "a knob change re-derives
-    like any other input", and a memo that ignored config would silently break
-    it. `Config` being hashable at all is ADR-001 §3.1.
+    `(pull_ref, pull_digest, config, as_of)`; the cache below keys on
+    `(store root, pull_ref, config)` instead, because the digest and the fetch
+    date are *functions of the file at that ref*, and `cache/` is immutable raw
+    responses by construction (ARCHITECTURE.md §5) — a refresh writes a new
+    ref, it never rewrites one. Logged as a [DEFAULT] deviation in the F0-S2
+    handoff.
+
+    The **root is in the key** and is resolved on every call, not at import:
+    an E2E harness (or a Layer-2 test) points the store at a temp directory
+    after this module has been imported, and a memo that ignored the root
+    would keep serving the pull from wherever the process first looked.
+
+    `config` is in the key deliberately: F0-S5's load-bearing clause is "a knob
+    change re-derives like any other input", and a memo that ignored config
+    would silently break it. `Config` being hashable at all is ADR-001 §3.1.
 
     A pure function cache: same key ⇒ same value, so it cannot affect
-    idempotence. Tests that rewrite a temp home in place call `.cache_clear()`.
+    idempotence. Tests that rewrite a store in place call `.cache_clear()`.
     """
-    path = fixture_pulls_dir() / f"{_safe_ref(pull_ref)}.json"
+    return _shaped_pull(fixture_pulls_dir(), pull_ref, config)
+
+
+@lru_cache(maxsize=4)
+def _shaped_pull(root: Path, pull_ref: str, config: Config) -> ShapedPull:
+    path = root / f"{_safe_ref(pull_ref)}.json"
     try:
         raw = path.read_bytes()
     except (FileNotFoundError, NotADirectoryError, IsADirectoryError) as exc:
@@ -155,6 +166,13 @@ def load_shaped_pull(pull_ref: str, config: Config) -> ShapedPull:
     )
 
 
+#: The memo's controls, exposed on the public entry point so callers never
+#: reach for the private cached function (and so QA's `clear_pipeline_caches`
+#: sweep finds them wherever it looks).
+load_shaped_pull.cache_clear = _shaped_pull.cache_clear
+load_shaped_pull.cache_info = _shaped_pull.cache_info
+
+
 def _shape(document: _PullDocument, config: Config) -> tuple[StitchedComp, ...]:
     """_STUB_RECORD_SHAPING — F4-S3 replaces the body, not the signature.
 
@@ -166,14 +184,28 @@ def _shape(document: _PullDocument, config: Config) -> tuple[StitchedComp, ...]:
     return document.comps
 
 
+#: Everything a legal ref may contain. F3-S1's cache keys are hex digests and
+#: the synthetic refs are hyphenated words, so both fit comfortably.
+_REF_ALPHABET = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
+)
+
+
 def _safe_ref(pull_ref: str) -> str:
     """Reject anything that could escape the pulls directory.
 
     A ref reaches this process from a request body, so `../../etc/passwd` is a
-    thing a client can ask for. Refs are flat names; a path separator in one is
-    not a ref, so it is "not found" rather than a traversal.
+    thing a client can ask for. A whitelist rather than a blacklist of
+    separators: it also rules out the null byte (which would otherwise reach
+    `open()` and surface as a 500 instead of a 404) and every other encoding
+    trick, and it cannot be defeated by a separator this code did not think of.
+    A leading dot is rejected separately so `..` cannot survive the alphabet.
     """
-    if not pull_ref or "/" in pull_ref or "\\" in pull_ref or pull_ref.startswith("."):
+    if (
+        not pull_ref
+        or pull_ref.startswith(".")
+        or not _REF_ALPHABET.issuperset(pull_ref)
+    ):
         raise PullNotFoundError(f"no pull found for ref {pull_ref!r}")
     return pull_ref
 

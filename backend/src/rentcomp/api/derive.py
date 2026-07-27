@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException
 from rentcomp.models.requests import DeriveRequest
 from rentcomp.models.responses import DerivedState
 from rentcomp.pipeline.derive import DeriveContext, derive
-from rentcomp.storage.config import load_config
+from rentcomp.storage.config import ConfigError, load_config
 from rentcomp.storage.pulls import PullNotFoundError, config_digest, load_shaped_pull
 
 __all__ = ["router"]
@@ -41,7 +41,16 @@ def post_derive(request: DeriveRequest) -> DerivedState:
     for an unknown field, a `selections` key, or a negative weight: each of
     those is curation that would otherwise fail silently.
     """
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        # A hand-edited config.json that no longer parses is a *user* problem
+        # with a specific fix, and F0-S5 already made the message name the
+        # file. Surfacing it beats an opaque 500 with the reason only in a
+        # server log the user is not reading (spec §7: never partial-render,
+        # always say what is wrong).
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     try:
         pull = load_shaped_pull(request.pull_ref, config)
     except PullNotFoundError as exc:

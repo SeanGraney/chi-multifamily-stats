@@ -1,0 +1,45 @@
+{
+  "ref": "ws1-anchor-drift",
+  "fetched_at": "2026-05-04",
+  "note": "WS-1 QA fixture (F8-S1 anchor drift formula). PRE-SHAPED, same convention as synthetic-basic.json. fetched_at is deliberately in the past (owner ruling 1). Two comps, deliberately at different cohort years with different psf, so the drift-compounding exponent (currentYear - cohortYear, currentYear read from the pull's as_of/fetched_at year = 2026) is distinguishable from a plain undrifted median. See backend/tests/api/test_ws1_anchor_drift.py for the worked values.",
+  "comps": [
+    {
+      "address": "10 W Current Cohort St",
+      "unit": null,
+      "lat": 41.9,
+      "lng": -87.68,
+      "beds": 3,
+      "baths": 2.0,
+      "sqft": 1000,
+      "initial_ask": 2000,
+      "effective_dom": 20,
+      "censored": false,
+      "removal_class": "confirmed",
+      "cohort_year": 2026,
+      "withdrawal_suspect": false,
+      "sqft_suspect": false,
+      "cut_history": [],
+      "relist_count": 0,
+      "gap_days": 0
+    },
+    {
+      "address": "20 W Older Cohort Ave",
+      "unit": null,
+      "lat": 41.9,
+      "lng": -87.68,
+      "beds": 3,
+      "baths": 2.0,
+      "sqft": 1000,
+      "initial_ask": 1000,
+      "effective_dom": 15,
+      "censored": false,
+      "removal_class": "confirmed",
+      "cohort_year": 2024,
+      "withdrawal_suspect": false,
+      "sqft_suspect": false,
+      "cut_history": [],
+      "relist_count": 0,
+      "gap_days": 0
+    }
+  ]
+}

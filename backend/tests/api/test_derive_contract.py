@@ -643,6 +643,48 @@ def test_comps_are_keyed_by_address_and_unit_not_by_listing_id(derived) -> None:
     # backend/tests/unit/test_derivation_graph.py::test_comp_key_is_derived_from_address_and_unit
 
 
+def test_comp_keys_are_unique_over_the_real_ws1_pull(derive) -> None:
+    """WS-1a [INVARIANT] — the same uniqueness property pinned above,
+    exercised against REAL data instead of only the synthetic fixture.
+
+    Architecture checkpoint 2 (QUEUE.md row 6a): the real `ws1-real` pull
+    shapes into 571 `StitchedComp`s but only 537 distinct
+    normalized-address+unit strings — 34 collisions, because one address+unit
+    can legitimately produce 2+ disjoint stitched chains (separate vacancy
+    episodes, e.g. a unit vacant in 2024 and vacant again in 2025 with a gap
+    too large to stitch). `test_comps_are_keyed_by_address_and_unit_not_by_
+    listing_id` above only ever caught this on synthetic data (one chain per
+    address by construction) — this test points the identical invariant at
+    the pull where the collision is real.
+
+    Deliberately NOT asserting *how* the key is disambiguated (that a
+    `[DEFAULT]` chosen by the developer, e.g. stitched-start date or cohort
+    year) — only that the outcome (global uniqueness) holds over real data.
+    """
+    response = derive(pull_ref="ws1-real")
+    assert response.status_code == 200, (
+        f"POST /api/derive with pull_ref='ws1-real' returned {response.status_code}: "
+        f"{response.text[:600]}"
+    )
+    comps = response.json()["comps"]
+    keys = [c["key"] for c in comps]
+    assert len(comps) > 0, "the real ws1-real pull must shape into at least some comps"
+
+    if len(set(keys)) != len(keys):
+        from collections import Counter
+
+        dupes = {key: count for key, count in Counter(keys).items() if count > 1}
+        raise AssertionError(
+            f"comp keys are not unique over the real ws1-real pull: {len(comps)} comps, "
+            f"{len(set(keys))} distinct keys, {len(dupes)} colliding key(s): {dupes} — "
+            "one normalized address+unit is producing 2+ disjoint stitched chains that "
+            "still share one identity (architecture checkpoint 2, QUEUE.md row 6a)"
+        )
+
+    for comp in comps:
+        assert isinstance(comp["key"], str) and comp["key"], "a comp has an empty key"
+
+
 class TestProposedContract:
     """QA-proposed behaviour that neither the story nor ADR-001 states
     outright. The PM/owner confirms (or overrides) these before they count as

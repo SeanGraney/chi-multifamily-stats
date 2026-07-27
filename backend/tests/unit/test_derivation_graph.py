@@ -329,7 +329,14 @@ def test_a_curve_result_and_a_guard_result_cannot_be_confused() -> None:
     assert literal_values(GuardResult.model_fields["reason"].annotation) == {
         "too_few_in_range",
         "all_censored",
-    }, "the two guard reasons of spec §5.4 are the only ones"
+        "curve_not_available",
+    }, (
+        "the two guard reasons of spec §5.4, plus WS-1a's provisional third value "
+        "(PM ruling, QUEUE.md row 6a: 'evidence is sufficient but no curve exists yet', "
+        "since F11-S2 does not exist — retires when F11-S2/F11-S3's guard-vs-curve branch "
+        "selection lands for real) — not a spec change, an honesty fix for a wire contract "
+        "with no truthful value to report in that state"
+    )
 
 
 @needs_graph

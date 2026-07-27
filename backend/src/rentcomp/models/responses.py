@@ -362,13 +362,21 @@ class DerivedWarning(BaseModel):
     Named `DerivedWarning` rather than ADR-001 §1.2's sketch spelling
     `Warning` so the module does not shadow the builtin (the field is still
     `warnings`; the wire shape is unchanged).
+
+    A warning never carries its own `comp_keys` list. It points at one of
+    `breakdown.comp_keys`' entries instead, so the comps behind a warning and
+    the comps behind the count that produced it are literally the same list —
+    two lists could disagree, and a `comp_keys` list outside `breakdown` reads
+    as an *evidence* list (the comps a statistic was computed from), which is
+    the opposite of what a warning names.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     code: str
     message: str
-    comp_keys: list[str] = Field(default_factory=list)
+    #: Key into `breakdown.comp_keys` — the click-through for this warning.
+    breakdown_ref: str | None = None
 
 
 class PartialPullInfo(BaseModel):

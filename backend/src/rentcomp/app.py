@@ -16,6 +16,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from rentcomp.api.derive import router as derive_router
+
 #: Env var that overrides where the built frontend is looked up. Used by
 #: tests (point it at a temp dir) and available to E2E harnesses; normal
 #: launches never need it.
@@ -46,6 +48,11 @@ def create_app() -> FastAPI:
     any ``/api/*`` route.
     """
     app = FastAPI(title="RentComp")
+
+    # Routers first, mount last — a Starlette mount at "/" swallows everything
+    # registered after it, so an API route added below the mount 404s the
+    # moment a UI build exists on disk (ADR-001 §4).
+    app.include_router(derive_router)
 
     dist = _ui_dist_dir()
     if dist.is_dir():

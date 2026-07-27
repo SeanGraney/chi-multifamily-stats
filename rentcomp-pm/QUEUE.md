@@ -19,17 +19,17 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 
 | # | Story | Lane | Blocked by | State | Notes |
 |---|---|---|---|---|---|
-| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **VERDICT: GO** — F4-S7 analysis pending | Round-2 broad pull 2026-07-26: 539 raw / 337 in-window distinct vs ≥15 → GO. Inactive truncated at 500 of 690 (X-Total-Count); §3.4 analysis report is the last in-story item |
-| 1a | F0-S1a backend scaffold (uv, FastAPI, entry point) | INFRA | T-S3 | BLOCKED | |
+| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **DONE** | GO 2026-07-26: 337 in-window distinct comps (≥15). 8 calls spent. Decision record + f4-s7-first-pull-analysis.md on main |
+| 1a | F0-S1a backend scaffold (uv, FastAPI, entry point) | INFRA | T-S3 | **DISPATCHED** | QA drafting tests |
 | 1b | F0-S1b frontend scaffold (Vite, Tailwind, codegen) | UI | F0-S1a | BLOCKED | needs FastAPI schema for codegen |
-| 2 | F0-S3 weighted stats | PIPE | T-S3 | BLOCKED | pure Python — parallel w/ #1a and #1b |
-| 3 | F0-S4 RentCast client | INFRA | T-S3 | BLOCKED | encodes range-syntax answer from gate |
+| 2 | F0-S3 weighted stats | PIPE | T-S3 | **DISPATCHED** | pure Python — parallel w/ #1a per lane rule; QA drafting tests |
+| 3 | F0-S4 RentCast client | INFRA | T-S3 | READY | encodes range-syntax answer (gate.py's rentcast_range/rentcast_multi); **F4-S7 evidence adds scope: read X-Total-Count, page via offset until complete or manifest the gap (D24/F4-S6) — Inactive fixture is a 500/690 sample** |
 | 4 | F0-S5 config store | INFRA | F0-S1 | BLOCKED | |
 | 5 | F0-S2 derivation graph | PIPE | F0-S3, F0-S5 | BLOCKED | deepest dependency in the repo; **CHECKPOINT: ADR + owner sign-off before implementation** |
 | 6 | **WS-1 walking skeleton** | PIPE | F0-S2, F0-S4 | BLOCKED | vertical slice: minimal pull→stitch→list→anchor→bucket→price test, zero styling; milestone — can price a unit if time runs out; **CHECKPOINT: architecture review after QA pass, before parallel dispatch opens** |
 | 7 | F4-S1 query planner | PIPE | WS-1 | BLOCKED | formalize + AC tests |
 | 8 | F4-S2 dedupe + spells | PIPE | F4-S1 | BLOCKED | |
-| 9 | F4-S3 stitcher (+ T-S1 golden files) | PIPE | F4-S2 | BLOCKED | 42d strict `<` |
+| 9 | F4-S3 stitcher (+ T-S1 golden files) | PIPE | F4-S2 | BLOCKED | 42d strict `<`; **F4-S7 evidence adds AC: merge contiguous history events (gap ≤1d = price change, not re-list; 23 real records) + synthesized single-spell fallback for no-history records (44 real, all have listedDate). T-S1: include 2453 W 46th Pl churn record + a price-change chain** |
 | 10 | F4-S8 removal classification + withdrawal-suspect | PIPE | F4-S3 | BLOCKED | |
 | 11 | F4-S4 window + cohort | PIPE | F4-S3 | BLOCKED | |
 | 12 | F4-S5 premium computation | PIPE | F4-S4 | BLOCKED | |
@@ -55,7 +55,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 31 | F11-S4 expected vacancy + cost | PIPE | F11-S2 | BLOCKED | |
 | 32 | F11-S5 price test UI | UI | F11-S3, F11-S4, F10-S2 | BLOCKED | |
 | 33 | F11-S6 decision log | INFRA | F11-S5 | BLOCKED | |
-| 34 | F2-S2 range parser | INFRA | T-S3 (syntax answer) | BLOCKED | |
+| 34 | F2-S2 range parser | INFRA | T-S3 (syntax answer) | READY | syntax answered: colon ranges, `*` open bounds, `\|` multi-values; single-value daysOld = range max (see gate.py builders + docs/rentcast-schema/) |
 | 35 | F2-S1 search form + F2-S3 estimator | INFRA | F2-S2, F0-S5 | BLOCKED | |
 | 36 | F3-S2 cache modal + F3-S3 atomicity | INFRA | F3-S1, F2-S3 | BLOCKED | |
 | 37 | F1-S2 workspace persistence | INFRA | F3-S1 | BLOCKED | |
@@ -85,3 +85,5 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 2026-07-26 | T-S3 | Round-2 dev handoff: story/T-S3 @ 6b1f41e — broad mode, optional bathrooms, verify+days-old forbidden (exit 2), bare colon-less --days-old refused (dev guard, round-1 defect class), round-1 fixture signatures verified preserved. 44/44 green, 0 live calls. → IN_REVIEW |
 | 2026-07-26 | T-S3 | Round-2 QA PASS accepted (13-row plan verified, both PM checks done). Merge sequence: qa→dev→main (cff7b98), branches deleted, 44/44 green on main |
 | 2026-07-26 | T-S3 | **LIVE RUN ROUND 2 → GO.** 2 calls spent (ledger 8/50). 39 Active (complete) + 500 Inactive (of 690 total per X-Total-Count — truncated, 190 unfetched). 539 raw distinct; **337 in-window distinct** (2026: 70, 2025: 155, 2024: 112) vs ≥15 threshold. Decision record + fixtures committed. Note: --max-calls semantics are monthly-total not per-run (docstring says per-run) — logged as cleanup candidate, zero calls wasted. Gate PASSED; F4-S7 §3.4 analysis dispatched; foundations unblock at story DONE |
+| 2026-07-26 | T-S3 | **DONE.** F4-S7 analysis on main @ 7380d6f: history preserves spells (73/539 multi-event, 50 true re-lists) but 23 contiguous price-change chains must merge (else fabricated re-lists); 44 no-history records need single-spell fallback; Multi-Family type nearly empty (3) — Apartment dominant (226), keep 5-type default; sqft missing 14.7%, yearBuilt 47.1%; pagination = X-Total-Count + offset. Evidence folded into F0-S4/F4-S3 queue notes. Owner decisions open: 1 call to un-truncate Inactive (190 records); two $/sqft outliers support F5-S1 verify-flag |
+| 2026-07-26 | F0-S1a, F0-S3 | Queue un-halted. Both DISPATCHED, QA-first, parallel per lane rule (INFRA + PIPE, low file overlap: scaffold vs pure stats). F0-S4 and F2-S2 flipped READY |

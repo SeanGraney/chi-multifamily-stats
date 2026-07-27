@@ -43,7 +43,8 @@ Contract (PM-confirmed rulings, F0-S5):
 * **`Config` is immutable** — a stage mutating knobs mid-derive would break
   F0-S2's idempotence.
 * **`km_horizons_days`** is non-empty, positive, and strictly increasing;
-  an unsorted list is rejected, not silently sorted.
+  an unsorted sequence is rejected, not silently sorted. Stored as a
+  `tuple` so `Config` is hashable and genuinely immutable (ADR-001 §3.1).
 * **`bucket_half_width_pct` is percentage points** (4.0 == ±4%), not a
   fraction — §2.3 states the range in percent, so bound and value share a
   unit.
@@ -122,11 +123,18 @@ class Config(BaseModel):
     #: `Literal` (not a free string + pattern) so the JSON schema carries the
     #: three legal values through to the generated TS types (D12).
     drift_source: Literal["zip", "cohort", "manual"] = "manual"
-    km_horizons_days: list[int] = Field(default_factory=lambda: [14, 30, 45, 60])
+    #: A **tuple**, not a list (ADR-001 §3.1, F0-S2): `frozen=True` blocks
+    #: rebinding a field, not mutation of a mutable field *value*, so
+    #: `cfg.km_horizons_days.append(90)` would change derived output with no
+    #: re-derive signal — and an unhashable `Config` cannot key the
+    #: record-shaping memo (ADR-001 §3). Same values, same order, same JSON
+    #: (`[14, 30, 45, 60]`), same generated TS type (`number[]`).
+    #: A tuple default is immutable, so `default_factory` is unnecessary.
+    km_horizons_days: tuple[int, ...] = (14, 30, 45, 60)
 
     @field_validator("km_horizons_days")
     @classmethod
-    def _validate_horizons(cls, horizons: list[int]) -> list[int]:
+    def _validate_horizons(cls, horizons: tuple[int, ...]) -> tuple[int, ...]:
         if not horizons:
             raise ValueError("km_horizons_days must not be empty")
         if any(day <= 0 for day in horizons):

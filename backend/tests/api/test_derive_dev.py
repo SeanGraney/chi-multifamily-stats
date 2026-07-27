@@ -127,16 +127,17 @@ def test_meta_reports_the_ref_it_derived_and_a_digest_of_the_evidence(
 # ---------------------------------------------------------------------------
 
 
-def test_every_placeholder_stage_announces_itself_in_the_payload(derived) -> None:
-    """A stub that is silent is a stub that gets screenshotted as a result.
-    Each entry names the story that replaces it, so the warning list doubles as
-    the handoff note the UI can render."""
+def test_no_placeholder_stage_survives_ws1(derived) -> None:
+    """WS-1 replaced the F0-S2 stubs (record shaping, anchor, bucket outcome
+    stats, kNN retrieval) with real implementations, so the `stub_stage`
+    warning inventory — and the `pipeline_version` marker that went with it
+    — retire together (`pipeline/derive.py`'s docstring). What remains
+    unbuilt (the KM curve, F11-S2) is not a placeholder NUMBER the way the
+    others were: the price test's guard branch is a real, honest terminal
+    state for thin evidence, not a stand-in for a curve."""
     stubs = [w for w in derived["warnings"] if w["code"] == "stub_stage"]
-    assert stubs, "the pipeline is stubbed but the payload does not say so"
-    blob = json.dumps(stubs)
-    for story in ("F4-S3", "F8-S1", "F10-S1", "F11-S1", "F11-S3", "F11-S2"):
-        assert story in blob, f"no stub warning names {story}"
-    assert "stubs" in derived["meta"]["pipeline_version"]
+    assert stubs == [], f"expected zero stub_stage warnings after WS-1, got: {stubs}"
+    assert "stubs" not in derived["meta"]["pipeline_version"]
 
 
 def test_a_warning_clicks_through_to_a_real_breakdown_count(derived) -> None:
@@ -149,12 +150,16 @@ def test_a_warning_clicks_through_to_a_real_breakdown_count(derived) -> None:
             )
 
 
-def test_the_placeholder_anchor_is_the_sentinel_not_a_market_estimate(derived) -> None:
-    """F0-S2 stub, asserted over HTTP so the wire cannot quietly start
-    carrying a plausible number before F8-S1 lands and this test is deleted."""
+def test_the_anchor_is_a_real_drift_adjusted_figure_not_the_f0_s2_sentinel(derived) -> None:
+    """F8-S1 [INVARIANT]: `anchor.psf` is the weighted median of drift-adjusted
+    comp $/sqft, over HTTP — asserted here as "not the old $1.00/sqft
+    sentinel, and the band is not degenerate", with the formula itself
+    pinned in `test_ws1_anchor_drift.py`."""
     anchor = derived["anchor"]
-    assert anchor["psf"] == {"low": 1.0, "mid": 1.0, "high": 1.0}
-    assert anchor["rent"]["mid"] == anchor["subject_sqft"]
+    assert anchor["psf"]["mid"] != 1.0
+    assert anchor["rent"]["mid"] != anchor["subject_sqft"], (
+        "rent == sqft was the F0-S2 stub's tell ($1.00/sqft): must not survive WS-1"
+    )
 
 
 # ---------------------------------------------------------------------------

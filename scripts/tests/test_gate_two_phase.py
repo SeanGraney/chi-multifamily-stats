@@ -12,8 +12,8 @@ suite in scripts/tests/test_gate.py:
 ZERO network (httpx.MockTransport), isolated tmp cwd, frozen clock — same
 harness conventions as QA's suite.
 
-NOTE for QA: this file lives in scripts/tests_dev/ only because the dev branch
-must not commit under scripts/tests/. Please relocate at merge.
+(Authored by dev on story/T-S3; relocated from scripts/tests_dev/ into
+scripts/tests/ by QA at merge, per the dev's handoff note.)
 """
 
 import json

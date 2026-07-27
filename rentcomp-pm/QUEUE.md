@@ -4,6 +4,8 @@
 
 **Spent 2026-07-26 (owner-authorized):** gate run, subject `3651 S Wood St, Chicago, IL 60609` (4bd / ba `1.5:2` per owner call, 1.0mi, window 07-28→08-20, 3yr) = 6 calls, two-phase as planned. All HTTP 200, syntax verified working (`X-Total-Count` echoed). Result: **1 comp total → NO-GO**. Queue halted pending owner redesign decision.
 
+**Planned spend (owner-authorized 2026-07-26, round 2):** broad diagnostic pull = **2 calls** (Active + Inactive): `daysOld=1:1095`, radius 2.0mi, `bedrooms=3:4` (owner-approved comp-pool expansion), propertyType `Multi-Family|Apartment|Townhouse|Single Family|Condo`, NO bathrooms filter, limit 500. Seasonal windowing applied locally to returned data; verdict on in-window distinct comps.
+
 **Deadline: 7/29/2026** — the tool must be able to price a real unit by this date. Working beats pretty; see `PROJECT_MANAGER.md`'s "Deadline awareness."
 
 Owned by the project manager. Every dispatch/completion/reorder is an edit here, committed to main. States: `BLOCKED · READY · DISPATCHED · IN_DEV · IN_REVIEW · REGRESSION · DONE`.
@@ -17,7 +19,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 
 | # | Story | Lane | Blocked by | State | Notes |
 |---|---|---|---|---|---|
-| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **ESCALATED — NO-GO** | harness merged & green; live run 2026-07-26 returned 1 comp vs ≥15 threshold. Queue HALTED per ordering rule #1; redesign options with owner |
+| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **DISPATCHED (round 2)** | NO-GO round 1 (1 comp). Owner chose broad-pull redesign + bedrooms 3:4; harness change in QA-first loop; 2 calls authorized |
 | 1a | F0-S1a backend scaffold (uv, FastAPI, entry point) | INFRA | T-S3 | BLOCKED | |
 | 1b | F0-S1b frontend scaffold (Vite, Tailwind, codegen) | UI | F0-S1a | BLOCKED | needs FastAPI schema for codegen |
 | 2 | F0-S3 weighted stats | PIPE | T-S3 | BLOCKED | pure Python — parallel w/ #1a and #1b |
@@ -78,3 +80,4 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 2026-07-26 | T-S3 | QA PASS report accepted (29-row plan table verified, both PM checks done). Merge sequence executed: qa→dev→main (ba13917), branches deleted, suite green on main. Live run pending owner's bathrooms-param call. → REGRESSION |
 | 2026-07-26 | T-S3 | Owner set bathrooms to range `1.5:2` (AskUserQuestion). Live run executed two-phase: call #1 (2026 Active) → 0 records, HTTP 200, X-Total-Count 0 (filters applied server-side, not flood) → --verify-window OK → remaining 5 spent. 6/6 HTTP 200 |
 | 2026-07-26 | T-S3 | **NO-GO**: 1 comp in 3 years of windows (3630 S Hermitage Unit 2R, 4bd/2ba Apt, $2800, DOM 31 — found only because ba was a range; exact 1.5 would have returned zero). Server total_counts confirm sparsity is real, not a syntax artifact. Fixtures + decision record committed. Queue halted; escalated to owner with redesign options (radius / propertyType incl. Single Family / drop ba filter / broad-pull-then-window-locally) |
+| 2026-07-26 | T-S3 | **OWNER DECISION (round 2):** option 1 broad pull, AND bedrooms expanded to `3:4` — owner explicitly approved 3-bedroom comps in the pool ("yes we can do 3 or 4 bedrooms for sure ... expand the comp pool"). Rationale: 1-comp NO-GO shows filtered pool too thin. 2 calls authorized. Harness change dispatched QA-first, same story |

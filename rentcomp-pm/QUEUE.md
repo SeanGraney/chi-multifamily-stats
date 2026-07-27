@@ -24,7 +24,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 1b | F0-S1b frontend scaffold (Vite, Tailwind, codegen) | UI | F0-S1a | READY | needs FastAPI schema for codegen. ⚠ create_app() mounts static at `/` LAST — any router added after the mount 404s when a UI build exists; F0-S1b QA must add a built-UI + real-API-route test |
 | 2 | F0-S3 weighted stats | PIPE | T-S3 | **DONE** | merged af88198; 115/115 on main; lower-median invariant mutation-verified on real code |
 | 3 | F0-S4 RentCast client | INFRA | T-S3 | READY | encodes range-syntax answer (gate.py's rentcast_range/rentcast_multi); **F4-S7 evidence adds scope: read X-Total-Count, page via offset until complete or manifest the gap (D24/F4-S6) — Inactive fixture is a 500/690 sample** |
-| 4 | F0-S5 config store | INFRA | F0-S1 | **DISPATCHED** | PM interpretation: blockedBy F0-S1 = F0-S1a for this BE story (no FE dependency) — logged. QA drafting tests; unblocks F0-S2 (ADR checkpoint) |
+| 4 | F0-S5 config store | INFRA | F0-S1 | **IN_DEV** | QA tests red on story/F0-S5-qa @ be99f9b (90 cases, contract validated by throwaway reference impl + 3 mutations). blockedBy F0-S1 read as F0-S1a (BE story). Unblocks F0-S2 (ADR checkpoint) |
 | 5 | F0-S2 derivation graph | PIPE | F0-S3, F0-S5 | BLOCKED | deepest dependency in the repo; **CHECKPOINT: ADR + owner sign-off before implementation**; ⚠ register /api/derive router BEFORE create_app()'s static mount (see F0-S1b note) |
 | 6 | **WS-1 walking skeleton** | PIPE | F0-S2, F0-S4 | BLOCKED | vertical slice: minimal pull→stitch→list→anchor→bucket→price test, zero styling; milestone — can price a unit if time runs out; **CHECKPOINT: architecture review after QA pass, before parallel dispatch opens** |
 | 7 | F4-S1 query planner | PIPE | WS-1 | BLOCKED | formalize + AC tests |
@@ -56,7 +56,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 32 | F11-S5 price test UI | UI | F11-S3, F11-S4, F10-S2 | BLOCKED | |
 | 33 | F11-S6 decision log | INFRA | F11-S5 | BLOCKED | |
 | 34 | F2-S2 range parser | INFRA | T-S3 (syntax answer) | READY | syntax answered: colon ranges, `*` open bounds, `\|` multi-values; single-value daysOld = range max (see gate.py builders + docs/rentcast-schema/) |
-| 35 | F2-S1 search form + F2-S3 estimator | INFRA | F2-S2, F0-S5 | BLOCKED | |
+| 35 | F2-S1 search form + F2-S3 estimator | INFRA | F2-S2, F0-S5 | BLOCKED | **PM ruling: this story now also owns `GET/PUT /api/config` (ARCH §4 lists it; F0-S5 builds the store only, no route).** PUT body = the Config model; F0-S5's ValueError must translate to 422 at the API edge |
 | 36 | F3-S2 cache modal + F3-S3 atomicity | INFRA | F3-S1, F2-S3 | BLOCKED | |
 | 37 | F1-S2 workspace persistence | INFRA | F3-S1 | BLOCKED | |
 | 38 | F1-S1 home view | UI | F1-S2 | BLOCKED | |
@@ -65,6 +65,15 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 41 | F14-S1 tab state + F14-S2 autosave + F14-S3 scroll | UI | F11-S5, F1-S2 | BLOCKED | 744px regression spec |
 | 42 | T-S2 invariant suite | TEST | F11-S5, F7-S1, F3-S2 | BLOCKED | |
 | 43 | **FINAL — full regression pass** | TEST | everything above | BLOCKED | QA solo, fresh branch off main, all F1–F14 specs green = MVP done |
+
+### Post-MVP follow-up candidates (not scheduled — owner decides if/when)
+
+| Candidate | Origin | Note |
+|---|---|---|
+| Move F11-S3 guard thresholds (3 neighbors, ±3 pts) into F0-S5 config | named in F0-S5 story text (L2.5 flag) | consistency only; not a behavior change |
+| Cross-knob coherence check (stitch gap vs withdrawal-suspect window) | F0-S5 QA finding | §2.3 ranges permit gap=60d + window=2mo (~60d), collapsing the withdrawal-suspect band to nothing. No spec basis for an invariant — inventing one is a semantic call, so it is NOT in F0-S5. Owner decision |
+| Un-truncate Inactive fixture (offset=500, 190 records) | T-S3 gate evidence | costs 1 API call; canonical fixture is currently a labeled 500/690 sample |
+| starlette TestClient/httpx2 deprecation | F0-S1a dev note | warning only today; becomes real if starlette drops httpx |
 
 ## Log
 
@@ -97,3 +106,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 2026-07-26 | F0-S3 | Dev handoff: story/F0-S3 @ b2c702e — numpy stable-argsort/cumsum/searchsorted; normalized cum-fractions ([DEFAULT]: float-exact scale invariance, same statistic); median delegates to quantile(0.5); errors checked before None path; -0.0 weight = zero not negative. 115/115 claimed (44+27+31+13). Dev pushed branch to origin (first push in project — noted, harmless). → IN_REVIEW |
 | 2026-07-26 | F0-S3 | **DONE.** QA PASS: normalized-fraction swap verified as "how not what" (representability proof + 2000-example soak + both mutations re-run against real code, 6 failures each). **Ruling recorded: -0.0 weight = zero (excluded), not negative (no ValueError)** — IEEE-consistent, pinned by dev test. Merged af88198, local branches deleted, 115/115 on main. origin/story/F0-S3 left on remote (only pushed copy of merged work until main pushes) |
 | 2026-07-26 | F0-S5 | Dispatched QA-first (priority rule 6: last blocker of F0-S2 ADR checkpoint = owner lead time). blockedBy F0-S1 read as F0-S1a (BE story). Sole tree owner |
+| 2026-07-26 | F0-S5 | QA agent terminated mid-story on a session usage limit; work was intact but uncommitted (branch cut, 669-line suite in tree). Resumed same agent to commit + report rather than restart — nothing lost, no rework |
+| 2026-07-26 | F0-S5 | QA handoff accepted: 47-row plan / 90 cases @ be99f9b, red legibly (2 fails + 87 gated skips). Contract pre-validated: throwaway reference impl passes 90/90, and 3 mutations (silent-defaults-on-corrupt-file, clamp-instead-of-raise, PAD-as-knob + k drift) caught by 16/23/8 tests |
+| 2026-07-26 | F0-S5 | **PM RULINGS on QA's 10 proposals — all CONFIRMED:** P1 in-process invalid ⇒ ValueError (matches F0-S3); P2 invalid file ⇒ ConfigError naming path, never silent defaults (a tuned 30d stitch gap silently becoming 42d reclassifies leases — exactly the confident-wrong-number failure the north star forbids); P3 load has no write side effects; P4 missing file keys ⇒ defaults; P5 unknown keys rejected (typo protection); P6 Config immutable (F0-S2 idempotence); P7 horizons positive + strictly increasing, reject don't sort; P8 bucket half-width in percentage points (4.0), §2.3 states the range in percent; P9 range endpoints inclusive; P10 file keys == field names |
+| 2026-07-26 | F0-S5 | **PM rulings on ambiguities:** (1) `/api/config` (ARCH §4) had no owning story — assigned to F2-S1 (queue #35), NOT F0-S5; (2) all-L1 accepted, no app surface exists (F0-S3 precedent); (3) pin ranges from §2.3 — story text is lossy, not contradictory; (4) cross-knob coherence → post-MVP candidate, semantic call not QA's; (5) drift_source canonical lowercase, case-insensitive acceptance left unpinned = dev [DEFAULT]; (6) accept all 3 drift sources incl. v2 zip/cohort — §2.3 lists them, F8 owns support; (7) RENTCOMP_HOME established here, inherited by all later storage stories |

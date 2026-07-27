@@ -530,8 +530,8 @@ def test_payload_carries_every_quantity_the_view_would_otherwise_compute(derive)
 
     included = [c for c in payload["comps"] if c["state"] == "included"]
     for comp in included:
-        assert comp["contribution_pct"] is not None, (
-            f"included comp {comp['key']!r} has no contribution_pct — the view must not divide "
+        assert comp["contribution_share"] is not None, (
+            f"included comp {comp['key']!r} has no contribution_share — the view must not divide "
             "a weight by the sum of weights itself (F5-S2)"
         )
         assert "distance_mi" in comp, "distance to the subject is not in the payload"
@@ -553,6 +553,41 @@ def test_payload_carries_every_quantity_the_view_would_otherwise_compute(derive)
             "expected vacancy days/cost are not in the payload — area under a step function "
             "is not a TypeScript job"
         )
+
+
+def test_the_contribution_field_is_named_share_not_pct(derived, app) -> None:
+    """PM ruling 2026-07-27 (relayed with the F0-S4 dispatch): the field holds
+    a RATIO (0.25 == 25%) and "the shares sum to one" is pinned, but ``_pct``
+    means percentage POINTS everywhere else here (F0-S5 has a test dedicated to
+    that unit contract). The name codegens into TypeScript and F5-S2's row is
+    "amber above 40%", so ``contribution_pct > 40`` would read as correct and
+    be wrong by 100x.
+
+    Rename only — the arithmetic is unchanged, which is why this asserts the
+    NAME and the *value range*, not a new number. The old name must be GONE,
+    not aliased: an alias leaves the 100x foot-gun in the generated TS.
+    """
+    for comp in derived["comps"]:
+        assert "contribution_share" in comp, (
+            f"comp {comp['key']!r} has no 'contribution_share' field (PM rename ruling)"
+        )
+        assert "contribution_pct" not in comp, (
+            f"comp {comp['key']!r} still carries 'contribution_pct' — the old name must be "
+            "removed, not kept alongside the new one"
+        )
+        share = comp["contribution_share"]
+        if share is not None:
+            assert 0.0 <= share <= 1.0, (
+                f"contribution_share is {share!r} — the ruling kept the RATIO semantics "
+                "(0.25 == 25%); a value above 1 means the rename silently became a unit change"
+            )
+
+    blob = json.dumps(app.openapi())
+    assert "contribution_pct" not in blob, (
+        "'contribution_pct' still appears in the OpenAPI document — D12 would codegen the "
+        "misleading name straight into the TypeScript the F5-S2 row is written against"
+    )
+    assert "contribution_share" in blob, "'contribution_share' is absent from the OpenAPI document"
 
 
 def test_meta_carries_the_provenance_of_the_derive(derived) -> None:

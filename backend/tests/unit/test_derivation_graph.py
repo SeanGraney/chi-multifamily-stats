@@ -523,6 +523,46 @@ def test_config_can_key_the_record_shaping_memo() -> None:
 
 
 # ---------------------------------------------------------------------------
+# naming (PM ruling 2026-07-27, relayed with the F0-S4 dispatch)
+# ---------------------------------------------------------------------------
+
+
+def test_the_weights_module_exports_contribution_shares_not_pcts() -> None:
+    """The producer half of the ``contribution_pct`` -> ``contribution_share``
+    rename. Pinned at the symbol so the function and the wire field cannot end
+    up disagreeing about which unit they are in — the response field is
+    asserted in ``tests/api/test_derive_contract.py``.
+
+    Rename only: the arithmetic (``weight / total``, shares sum to one) is
+    unchanged and still covered by the developer's own unit tests.
+    """
+    try:
+        from rentcomp.pipeline import weights
+    except ImportError as exc:  # pragma: no cover - F0-S2 landed, so this is real breakage
+        pytest.fail(f"cannot import rentcomp.pipeline.weights: {exc}")
+
+    assert hasattr(weights, "contribution_shares"), (
+        "rentcomp.pipeline.weights has no 'contribution_shares' — the PM ruled "
+        "contribution_pcts() renames to contribution_shares() (ratio semantics kept)"
+    )
+    assert not hasattr(weights, "contribution_pcts"), (
+        "'contribution_pcts' still exists — the old name must be removed, not aliased; "
+        "an alias keeps the '_pct means percentage points' collision alive"
+    )
+    assert "contribution_pcts" not in getattr(weights, "__all__", ()), (
+        "the old name is still exported in __all__"
+    )
+
+    # the rename must not have moved the number: three equal weights, all
+    # included, still split the influence three ways.
+    shares = weights.contribution_shares([1.0, 1.0, 1.0], [True, True, True])
+    assert [round(s, 6) for s in shares] == [round(1 / 3, 6)] * 3, (
+        f"contribution_shares returned {shares!r} — the ruling was rename-only; a value of "
+        "33.3 would mean the unit changed with the name"
+    )
+
+
+# ---------------------------------------------------------------------------
 # comp identity (F13-S1 [INVARIANT])
 # ---------------------------------------------------------------------------
 

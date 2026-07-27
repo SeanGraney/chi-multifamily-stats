@@ -5,11 +5,11 @@ the product package happens lazily inside fixtures/tests. A missing package
 (or missing fastapi, since `pip install -e .` is the developer's step) must
 produce a legible per-test failure message, never a collection error.
 
-App-object location: ARCHITECTURE.md §2 places FastAPI routers in
-`rentcomp/api/` but does not pin where the assembled app object lives, so
-this resolver accepts a short list of canonical locations. Once the
-developer's implementation lands, QA will tighten this to the one real
-location (flagged to the PM in the F0-S1a test-plan handoff).
+App-object location: pinned to the canonical **`rentcomp.app:app`**
+(module-level object built by `create_app()` in the same module) per the
+F0-S1a contract ruling relayed by the PM — this replaces the original
+pre-implementation candidate-list resolver. If this import fails, that is a
+contract break, not a lookup miss.
 """
 
 from __future__ import annotations
@@ -19,58 +19,29 @@ import importlib
 import pytest
 
 _SCAFFOLD_HINT = (
-    "F0-S1a scaffold not implemented yet: {problem} "
+    "F0-S1a scaffold broken: {problem} "
     "(expected after `pip install -e backend/` into the repo-root .venv)"
-)
-
-# (module, attribute) candidates for the module-level app object, then for an
-# app factory. Ordered by how strongly ARCHITECTURE.md §2 implies each.
-_APP_CANDIDATES = (
-    ("rentcomp.api", "app"),
-    ("rentcomp.app", "app"),
-    ("rentcomp.main", "app"),
-    ("rentcomp", "app"),
-)
-_FACTORY_CANDIDATES = (
-    ("rentcomp.api", "create_app"),
-    ("rentcomp.app", "create_app"),
-    ("rentcomp.main", "create_app"),
-    ("rentcomp", "create_app"),
 )
 
 
 def _resolve_app():
     try:
-        importlib.import_module("rentcomp")
+        module = importlib.import_module("rentcomp.app")
     except ImportError as exc:
-        pytest.fail(_SCAFFOLD_HINT.format(problem=f"cannot import 'rentcomp' ({exc})"))
-
-    for module_name, attr in _APP_CANDIDATES:
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        candidate = getattr(module, attr, None)
-        if candidate is not None:
-            return candidate
-
-    for module_name, attr in _FACTORY_CANDIDATES:
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        factory = getattr(module, attr, None)
-        if callable(factory):
-            return factory()
-
-    pytest.fail(
-        _SCAFFOLD_HINT.format(
-            problem=(
-                "no FastAPI app object found at any canonical location "
-                f"(looked for {_APP_CANDIDATES} then factories {_FACTORY_CANDIDATES})"
+        pytest.fail(
+            _SCAFFOLD_HINT.format(
+                problem=f"cannot import 'rentcomp.app' — canonical app module ({exc})"
             )
         )
-    )
+    candidate = getattr(module, "app", None)
+    if candidate is None:
+        pytest.fail(
+            _SCAFFOLD_HINT.format(
+                problem="'rentcomp.app' has no module-level 'app' object "
+                "(canonical contract is rentcomp.app:app)"
+            )
+        )
+    return candidate
 
 
 @pytest.fixture(scope="session")

@@ -1,0 +1,45 @@
+{
+  "ref": "ws1-anchor-drift",
+  "fetched_at": "2026-05-04",
+  "note": "WS-1 (F8-S1), hand-authored. PRE-SHAPED, per the F0-S2 fixture convention -- see synthetic-basic.json's note. Two comps, distinct cohort years and distinct psf, so the drift-compounding exponent (currentYear - cohortYear) is distinguishable from a plain undrifted median: '10 W Current Cohort St' is this pull's own cohort year (2026, psf=2.00, exponent 0 at any drift) and '20 W Older Cohort Ave' is two years older (2024, psf=1.00, exponent 2). fetched_at=2026-05-04 fixes currentYear=2026 (PM ruling: current year = the pull's as_of year, never the wall clock).",
+  "comps": [
+    {
+      "address": "10 W Current Cohort St",
+      "unit": null,
+      "lat": 41.9021,
+      "lng": -87.6787,
+      "beds": 2,
+      "baths": 1.0,
+      "sqft": 1000,
+      "initial_ask": 2000,
+      "effective_dom": 20,
+      "censored": false,
+      "removal_class": "confirmed",
+      "cohort_year": 2026,
+      "withdrawal_suspect": false,
+      "sqft_suspect": false,
+      "cut_history": [],
+      "relist_count": 0,
+      "gap_days": 0
+    },
+    {
+      "address": "20 W Older Cohort Ave",
+      "unit": null,
+      "lat": 41.8966,
+      "lng": -87.6748,
+      "beds": 2,
+      "baths": 1.0,
+      "sqft": 1000,
+      "initial_ask": 1000,
+      "effective_dom": 35,
+      "censored": false,
+      "removal_class": "confirmed",
+      "cohort_year": 2024,
+      "withdrawal_suspect": false,
+      "sqft_suspect": false,
+      "cut_history": [],
+      "relist_count": 0,
+      "gap_days": 0
+    }
+  ]
+}

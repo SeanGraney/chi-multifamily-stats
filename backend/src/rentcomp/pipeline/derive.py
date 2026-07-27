@@ -139,7 +139,9 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
     comp_buckets = [bucket_of(premium, cfg.bucket_half_width_pct) for premium in premiums]
 
     drift = drift_band(req.drift_pct, DRIFT_SENSITIVITY_PTS)
-    anchor = anchor_stage(keys, psfs, years, weights, included, drift, req.subject.sqft)
+    anchor = anchor_stage(
+        keys, psfs, years, weights, included, drift, req.subject.sqft, ctx.as_of.year
+    )
     buckets = bucket_stats(
         comps, keys, premiums, included, comp_buckets, anchor, cfg.bucket_half_width_pct
     )

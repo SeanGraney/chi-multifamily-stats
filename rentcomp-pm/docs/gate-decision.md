@@ -1,19 +1,28 @@
-# T-S3 Go/No-Go Gate — Decision Record
+# T-S3 Go/No-Go Gate — Decision Record (broad pull)
 
 **Run date:** 2026-07-26
 **Subject:** 3651 S Wood St, Chicago, IL 60609
-**Windows:** [{'year': 2026, 'daysOldMin': 1, 'daysOldMax': 88}, {'year': 2025, 'daysOldMin': 250, 'daysOldMax': 453}, {'year': 2024, 'daysOldMin': 615, 'daysOldMax': 818}]
-**Calls spent this run:** 6
-**Raw records pulled:** 1
-**Distinct addresses/ids:** 1
+**Mode:** broad pull — literal daysOld=1:1095; seasonal windows applied locally
+**Window (year-agnostic):** 07-28..08-20, 3 years back, padded ±90d inclusive
+**Calls on ledger this month:** 8
+**Raw records pulled:** 539
+**Raw distinct addresses/ids (diagnostic only):** 539
+**In-window distinct comps (verdict basis):** 337
 
-**Verdict: NO-GO — insufficient comp coverage**
+Per-window in-window distinct counts:
+- 2026 window: 70 in-window distinct comps
+- 2025 window: 155 in-window distinct comps
+- 2024 window: 112 in-window distinct comps
 
-(Threshold: >=15 distinct comps pre-stitching, matching spec §8's leading indicator
-of >=15 usable comps per pull. This is a raw-count sanity check, not the final
-usable-comp count — real dedupe/stitch/window/cohort filtering happens in F4 and
-will reduce this number. If this raw count is already under 15, the pipeline's
-filtered count will be lower still, which is why this is a gate, not a formality.)
+**Verdict: GO**
+
+(Threshold: >=15 distinct comps whose listedDate lands inside ANY padded
+seasonal window — the same ±90-day inclusive windows a windowed pull
+would have requested on the wire, applied locally to the broad pull instead.
+Records with a missing or unparseable listedDate cannot be verified in-window:
+they are excluded from the verdict count but are NOT an error — they remain in
+the raw fixture data for the F4 pipeline to handle. Distinctness rule:
+formattedAddress, falling back to id — same as the windowed-mode raw count.)
 
 Raw responses saved to `fixtures/live-samples/` — these seed the entire build's
 fixture-mode development going forward (WORKFLOW.md §6).

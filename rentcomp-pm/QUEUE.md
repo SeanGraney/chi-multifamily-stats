@@ -1,6 +1,6 @@
 # Story Queue — live state
 
-**API call ledger (50/month hard cap):** used **6** · remaining **44** · gate reserve had ≤10 (4 unspent) · reserved for owner's real pulls ~40. No live call without a ledger entry (WORKFLOW.md §6). Detail ledger: `fixtures/live-samples/ledger.json`.
+**API call ledger (50/month hard cap):** used **8** · remaining **42** · gate spent 8 of its ≤10 reserve · reserved for owner's real pulls ~40. No live call without a ledger entry (WORKFLOW.md §6). Detail ledger: `fixtures/live-samples/ledger.json`.
 
 **Spent 2026-07-26 (owner-authorized):** gate run, subject `3651 S Wood St, Chicago, IL 60609` (4bd / ba `1.5:2` per owner call, 1.0mi, window 07-28→08-20, 3yr) = 6 calls, two-phase as planned. All HTTP 200, syntax verified working (`X-Total-Count` echoed). Result: **1 comp total → NO-GO**. Queue halted pending owner redesign decision.
 
@@ -19,7 +19,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 
 | # | Story | Lane | Blocked by | State | Notes |
 |---|---|---|---|---|---|
-| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **IN_REVIEW (round 2)** | NO-GO round 1 (1 comp). Owner chose broad-pull redesign + bedrooms 3:4; harness change in QA-first loop; 2 calls authorized |
+| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **VERDICT: GO** — F4-S7 analysis pending | Round-2 broad pull 2026-07-26: 539 raw / 337 in-window distinct vs ≥15 → GO. Inactive truncated at 500 of 690 (X-Total-Count); §3.4 analysis report is the last in-story item |
 | 1a | F0-S1a backend scaffold (uv, FastAPI, entry point) | INFRA | T-S3 | BLOCKED | |
 | 1b | F0-S1b frontend scaffold (Vite, Tailwind, codegen) | UI | F0-S1a | BLOCKED | needs FastAPI schema for codegen |
 | 2 | F0-S3 weighted stats | PIPE | T-S3 | BLOCKED | pure Python — parallel w/ #1a and #1b |
@@ -83,3 +83,5 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 2026-07-26 | T-S3 | **OWNER DECISION (round 2):** option 1 broad pull, AND bedrooms expanded to `3:4` — owner explicitly approved 3-bedroom comps in the pool ("yes we can do 3 or 4 bedrooms for sure ... expand the comp pool"). Rationale: 1-comp NO-GO shows filtered pool too thin. 2 calls authorized. Harness change dispatched QA-first, same story |
 | 2026-07-26 | T-S3 | Round-2 QA handoff accepted: 7 red tests on fresh story/T-S3-qa @ 1d49658 (test_gate_broad.py), 29 round-1 tests green. PM rulings: --verify-window + --days-old combination FORBIDDEN (explicit error); missing listedDate = out-of-window in broad verdict (accepted); no 2-call hard-cap test (only 2 signatures exist; PM runs --max-calls 2). → IN_DEV |
 | 2026-07-26 | T-S3 | Round-2 dev handoff: story/T-S3 @ 6b1f41e — broad mode, optional bathrooms, verify+days-old forbidden (exit 2), bare colon-less --days-old refused (dev guard, round-1 defect class), round-1 fixture signatures verified preserved. 44/44 green, 0 live calls. → IN_REVIEW |
+| 2026-07-26 | T-S3 | Round-2 QA PASS accepted (13-row plan verified, both PM checks done). Merge sequence: qa→dev→main (cff7b98), branches deleted, 44/44 green on main |
+| 2026-07-26 | T-S3 | **LIVE RUN ROUND 2 → GO.** 2 calls spent (ledger 8/50). 39 Active (complete) + 500 Inactive (of 690 total per X-Total-Count — truncated, 190 unfetched). 539 raw distinct; **337 in-window distinct** (2026: 70, 2025: 155, 2024: 112) vs ≥15 threshold. Decision record + fixtures committed. Note: --max-calls semantics are monthly-total not per-run (docstring says per-run) — logged as cleanup candidate, zero calls wasted. Gate PASSED; F4-S7 §3.4 analysis dispatched; foundations unblock at story DONE |

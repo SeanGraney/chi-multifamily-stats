@@ -1,5 +1,5 @@
 {
-  "calls_this_month": 6,
+  "calls_this_month": 8,
   "history": [
     {
       "sig": "cac96ac5a379f26c",
@@ -96,6 +96,36 @@
       },
       "status": 200,
       "total_count": 0
+    },
+    {
+      "sig": "fe9de5158f036802",
+      "params": {
+        "address": "3651 S Wood St, Chicago, IL 60609",
+        "radius": 2.0,
+        "bedrooms": "3:4",
+        "propertyType": "Multi-Family|Apartment|Townhouse|Single Family|Condo",
+        "status": "Active",
+        "daysOld": "1:1095",
+        "limit": 500,
+        "includeTotalCount": "true"
+      },
+      "status": 200,
+      "total_count": 39
+    },
+    {
+      "sig": "6327600317b11d16",
+      "params": {
+        "address": "3651 S Wood St, Chicago, IL 60609",
+        "radius": 2.0,
+        "bedrooms": "3:4",
+        "propertyType": "Multi-Family|Apartment|Townhouse|Single Family|Condo",
+        "status": "Inactive",
+        "daysOld": "1:1095",
+        "limit": 500,
+        "includeTotalCount": "true"
+      },
+      "status": 200,
+      "total_count": 690
     }
   ]
 }

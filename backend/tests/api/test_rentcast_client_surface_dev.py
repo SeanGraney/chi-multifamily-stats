@@ -23,11 +23,12 @@ import pytest
 
 from rentcomp.client.rentcast import (
     AuthError,
+    CallBudgetExceededError,
     RentCastClient,
     UpstreamError,
     fixture_signature,
 )
-from rentcomp.storage.ledger import load_ledger
+from rentcomp.storage.ledger import MONTHLY_CALL_CAP, current_month, load_ledger
 
 FAKE_KEY = "dev-fake-key-not-a-real-credential"
 
@@ -241,3 +242,43 @@ def test_max_calls_zero_sends_nothing_and_says_so(live_client) -> None:
     assert sent == [] and result.calls_spent == 0
     assert result.complete is False
     assert load_ledger().calls_this_month == 0
+
+
+# ---------------------------------------------------------------------------
+# nothing is CONSTRUCTED when no call is possible
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("seed", "max_calls"), [(MONTHLY_CALL_CAP, None), (0, 0)], ids=["budget-gone", "max-calls-0"]
+)
+def test_no_transport_is_built_when_no_call_could_be_made(
+    live_client, home: Path, monkeypatch, seed: int, max_calls
+) -> None:
+    """One step stronger than "no request was sent": no transport is even
+    constructed.
+
+    QA's guard proves this for fixture mode. The same property has to hold on
+    the *live* path when the answer is already known — a client that opens a
+    connection to discover it has no budget is one refactor away from opening
+    it and then using it, and the check that stopped it would be the one
+    nobody re-reads.
+    """
+    (home / "ledger.json").write_text(
+        json.dumps({"month": current_month(), "calls_this_month": seed, "history": []}),
+        encoding="utf-8",
+    )
+    client, sent = live_client(paged(39))
+    monkeypatch.setattr(
+        RentCastClient,
+        "_open",
+        lambda self, key: pytest.fail("a transport was built when no call was possible"),
+    )
+
+    try:
+        result = client.fetch_listings(dict(QUERY), max_calls=max_calls)
+    except CallBudgetExceededError:
+        pass  # the budget-gone answer
+    else:
+        assert result.calls_spent == 0 and result.complete is False
+    assert sent == []

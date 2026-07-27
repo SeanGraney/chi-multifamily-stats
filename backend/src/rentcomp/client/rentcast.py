@@ -440,6 +440,23 @@ class RentCastClient:
         ledger = load_ledger()
         limit = _page_limit(params)
 
+        # Pre-flight, before a transport exists. The loop below repeats both
+        # checks because they also govern *mid-pull* stops, where the answer is
+        # "keep what was paid for" rather than "refuse" — but when no call is
+        # possible at all, nothing should be constructed to make one with.
+        if ledger.remaining <= 0:
+            raise CallBudgetExceededError(
+                f"the monthly RentCast budget is spent ({ledger.calls_this_month}/"
+                f"{MONTHLY_CALL_CAP} calls in {ledger.month}). Nothing was sent."
+            )
+        if max_calls is not None and max_calls <= 0:
+            # A caller asking for zero calls gets zero calls — not an error, and
+            # not a result that could be mistaken for an empty market.
+            return ListingsResult(
+                records=(), total_count=None, fetched=0, complete=False,
+                missing=0, calls_spent=0, pages=(),
+            )
+
         pages: list[ListingsPage] = []
         records: list[dict] = []
         total_count: int | None = None

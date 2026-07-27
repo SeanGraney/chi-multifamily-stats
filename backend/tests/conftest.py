@@ -10,11 +10,27 @@ App-object location: pinned to the canonical **`rentcomp.app:app`**
 F0-S1a contract ruling relayed by the PM — this replaces the original
 pre-implementation candidate-list resolver. If this import fails, that is a
 contract break, not a lookup miss.
+
+F0-S4 addition — the suite-wide network kill switch
+---------------------------------------------------
+`no_network` below is autouse for the WHOLE backend suite: every outbound
+socket connection raises. WORKFLOW.md §6 is a hard money constraint (50
+calls/month, 42 left) and D17's guarantee is "the client cannot reach the
+network without the flag" — a guarantee that is only worth what the weakest
+test honours it. This makes an accidental live call impossible from a test
+that forgot to inject a transport, instead of merely unlikely.
+
+It is deliberately a *backstop*, not the AC's proof: the AC is asserted
+structurally in `tests/unit/test_live_call_guard.py`. A test that genuinely
+needs to exercise the live code path injects an `httpx.MockTransport` (the
+pattern `scripts/tests/test_gate.py` established), which never opens a
+socket, so the switch is invisible to it.
 """
 
 from __future__ import annotations
 
 import importlib
+import socket
 
 import pytest
 
@@ -60,3 +76,45 @@ def client(app):
             _SCAFFOLD_HINT.format(problem=f"fastapi not importable from .venv ({exc})")
         )
     return TestClient(app)
+
+
+class NetworkUseInTestsError(RuntimeError):
+    """Raised when a test tries to open a socket (WORKFLOW.md §6: zero live
+    API calls, ever, from the suite)."""
+
+
+#: Set by the kill switch every time something tried to dial out, so a test
+#: can assert *that* an attempt was made without ever letting it complete.
+network_attempts: list[str] = []
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Autouse, every test: outbound sockets raise.
+
+    A RentCast call costs real money against a 50/month cap. This is the
+    backstop that makes "zero live API calls" a property of the runner rather
+    than of every individual test author's memory. `httpx.MockTransport`
+    short-circuits above the socket layer, so mocked-transport tests are
+    unaffected.
+    """
+    del network_attempts[:]
+
+    def _blocked(target: object) -> "NetworkUseInTestsError":
+        network_attempts.append(repr(target))
+        return NetworkUseInTestsError(
+            f"a test tried to open a network connection to {target!r}. The backend suite "
+            "runs in fixture mode with zero live API calls (WORKFLOW.md §6 — 50 calls/month, "
+            "and every one of them is the owner's). Inject an httpx.MockTransport instead."
+        )
+
+    def _connect(self, address, *args, **kwargs):  # noqa: ANN001
+        raise _blocked(address)
+
+    def _create_connection(address, *args, **kwargs):  # noqa: ANN001
+        raise _blocked(address)
+
+    monkeypatch.setattr(socket.socket, "connect", _connect, raising=True)
+    monkeypatch.setattr(socket.socket, "connect_ex", _connect, raising=True)
+    monkeypatch.setattr(socket, "create_connection", _create_connection, raising=True)
+    yield network_attempts

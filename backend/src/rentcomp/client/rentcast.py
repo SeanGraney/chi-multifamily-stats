@@ -470,13 +470,11 @@ class RentCastClient:
                     stopped_early = True
                     break
                 if ledger.remaining <= 0:
-                    if not pages:
-                        raise CallBudgetExceededError(
-                            f"the monthly RentCast budget is spent "
-                            f"({ledger.calls_this_month}/{MONTHLY_CALL_CAP} calls in "
-                            f"{ledger.month}). Nothing was sent."
-                        )
-                    # Mid-pull: keep what was already paid for and name the gap.
+                    # Only ever mid-pull: the pre-flight check above owns the
+                    # "no budget at all, nothing was sent" case, so the first
+                    # iteration always has budget and this can only fire once at
+                    # least one page has been paid for. Keep what was bought and
+                    # name the gap rather than refusing.
                     stopped_early = True
                     break
 
@@ -505,7 +503,13 @@ class RentCastClient:
                 )
                 save_ledger(ledger)
 
-                if response.status_code >= 400:
+                # 2xx ONLY reaches the sink below. Not `>= 400`: redirects are
+                # not followed (`follow_redirects` is off), so a 3xx arrives
+                # here as an ordinary response, and caching its body would let
+                # F3-S4 resume against a redirect page as if the query had been
+                # answered. Anything that is not a success is a failure the
+                # ledger records and the cache never sees.
+                if not response.is_success:
                     raise _error_for(response, api_key)
 
                 raw = response.content

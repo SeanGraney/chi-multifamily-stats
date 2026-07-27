@@ -41,11 +41,20 @@ then runs for real.
 from __future__ import annotations
 
 import math
+import os
 import statistics
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+
+# QA soak profile: `HYPOTHESIS_PROFILE=qa-soak pytest ...` runs the property
+# tests at 2000 examples each (used in the verify pass to stress the
+# normalized-cumulative-fraction float-safety claim; default profile
+# otherwise).
+settings.register_profile("qa-soak", max_examples=2000)
+if os.environ.get("HYPOTHESIS_PROFILE"):
+    settings.load_profile(os.environ["HYPOTHESIS_PROFILE"])
 
 try:
     from rentcomp.stats.weighted import weighted_median, weighted_quantile

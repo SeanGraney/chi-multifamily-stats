@@ -53,6 +53,19 @@ from pathlib import Path
 
 import httpx
 
+# The RentCast wire syntax (colon ranges, pipe-joined multi-values) is imported
+# from the product package rather than kept as a second copy here — F0-S4, PM
+# ruling 2026-07-27. Two copies of the syntax that spends money is a drift
+# surface: T-S3 round 1 sent commas and bare values, got an empty result back,
+# and an empty result is indistinguishable from a thin market. `backend/src` is
+# put on the path explicitly so this script still runs from a bare clone with
+# no `pip install -e .`, which is the whole reason it was self-contained.
+_BACKEND_SRC = Path(__file__).resolve().parents[1] / "backend" / "src"
+if str(_BACKEND_SRC) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_SRC))
+
+from rentcomp.client.query import rentcast_multi, rentcast_range  # noqa: E402
+
 RENTCAST_BASE = "https://api.rentcast.io/v1"
 FIXTURES_DIR = Path("fixtures/live-samples")
 LEDGER_PATH = FIXTURES_DIR / "ledger.json"
@@ -103,33 +116,10 @@ def compute_window(window_start: str, window_end: str, years_back: int) -> list[
     return windows
 
 
-def rentcast_range(min_value, max_value) -> str:
-    """RentCast numeric-range syntax: ONE param, colon-separated — `min:max`,
-    open-ended with `*` (`2000:*`, `*:10`).
-
-    A BARE single value (e.g. `daysOld=5`) is treated by RentCast as the range
-    MAXIMUM, not an exact match — so a degenerate range must still be emitted
-    as colon syntax (`5:5`), never bare. Fully unpinned (None, None) is a
-    caller bug, not a query: raise rather than emit `*:*`.
-
-    Shared syntax: bedrooms/bathrooms ranges use this identically (F0-S4 and
-    F2-S2 inherit this function).
-    """
-    if min_value is None and max_value is None:
-        raise ValueError("rentcast_range requires at least one bound (got None, None)")
-    lo = "*" if min_value is None else str(min_value)
-    hi = "*" if max_value is None else str(max_value)
-    return f"{lo}:{hi}"
-
-
-def rentcast_multi(values) -> str:
-    """RentCast multiple-value syntax: ONE param, pipe-separated —
-    `Multi-Family|Apartment|Townhouse`. Commas do not match anything.
-    Ranges and multi-values cannot be combined in one param."""
-    values = list(values)
-    if not values:
-        raise ValueError("rentcast_multi requires at least one value")
-    return "|".join(str(v) for v in values)
+# rentcast_range / rentcast_multi are imported at the top of this module from
+# rentcomp.client.query — same functions, same behaviour, same module-level
+# names as before. Their docstrings (and the reasons behind the syntax) live
+# there now.
 
 
 def parse_listed_date(value):

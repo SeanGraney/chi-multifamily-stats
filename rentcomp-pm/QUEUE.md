@@ -17,7 +17,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 
 | # | Story | Lane | Blocked by | State | Notes |
 |---|---|---|---|---|---|
-| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **IN_REVIEW** | 6 live calls planned (see ledger); needs owner's API key; failure ⇒ halt & escalate |
+| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **REGRESSION** | harness merged to main (ba13917), suite green; live run pending — story completes with GO/NO-GO verdict |
 | 1a | F0-S1a backend scaffold (uv, FastAPI, entry point) | INFRA | T-S3 | BLOCKED | |
 | 1b | F0-S1b frontend scaffold (Vite, Tailwind, codegen) | UI | F0-S1a | BLOCKED | needs FastAPI schema for codegen |
 | 2 | F0-S3 weighted stats | PIPE | T-S3 | BLOCKED | pure Python — parallel w/ #1a and #1b |
@@ -75,3 +75,4 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 2026-07-26 | T-S3 | DISPATCHED — QA spawned first per protocol (tests on story/T-S3-qa before any code) |
 | 2026-07-26 | T-S3 | QA handoff accepted: 18 tests on story/T-S3-qa @ f0c3fe7 (9 red = defects, 9 green = D24 pins); plan table complete, all L1, no-Playwright deviation approved. PM accepted QA judgment: ±90 boundaries inclusive; missing listedDate ⇒ verdict not ok. → IN_DEV |
 | 2026-07-26 | T-S3 | Dev handoff: story/T-S3 @ 6d1f31b+af09e4a — colon/pipe syntax via rentcast_range/rentcast_multi, --verify-window offline mode, X-Total-Count in ledger. 29/29 pytest green, 0 live calls. [DEFAULT]s logged. ⚠ operational: all run phases must share one calendar day (cache sig embeds today). → IN_REVIEW |
+| 2026-07-26 | T-S3 | QA PASS report accepted (29-row plan table verified, both PM checks done). Merge sequence executed: qa→dev→main (ba13917), branches deleted, suite green on main. Live run pending owner's bathrooms-param call. → REGRESSION |

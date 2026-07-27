@@ -195,6 +195,21 @@ def home(tmp_path, monkeypatch) -> Path:
     return root
 
 
+def _comparable(value: object) -> object:
+    """Normalize an ordered sequence knob for comparison.
+
+    F0-S2/ADR-001 section 3.1 turns ``km_horizons_days`` into a ``tuple`` so
+    that ``Config`` is hashable (it keys the record-shaping memo) and
+    genuinely immutable (Pydantic's ``frozen=True`` blocks rebinding a field,
+    not mutating a list in place). Same values, same order, same meaning,
+    same JSON, same generated TS type -- implementation-only. These
+    assertions keep pinning the values and the ORDER; they simply no longer
+    pin the container type, which the file already declined to pin at
+    ``test_km_horizons_is_an_ordered_list`` (accepts list or tuple).
+    """
+    return list(value) if isinstance(value, (list, tuple)) else value
+
+
 def _write_config_file(home_dir: Path, payload: object) -> Path:
     path = home_dir / "config.json"
     path.write_text(
@@ -239,7 +254,9 @@ def test_knob_default(field: str, expected: object) -> None:
     cfg = Config()
     assert hasattr(cfg, field), f"Config has no knob {field!r} (spec §2.3)"
     actual = getattr(cfg, field)
-    assert actual == expected, f"{field}: default is {actual!r}, spec §2.3 says {expected!r}"
+    assert _comparable(actual) == _comparable(expected), (
+        f"{field}: default is {actual!r}, spec §2.3 says {expected!r}"
+    )
 
 
 @needs_config
@@ -248,7 +265,7 @@ def test_defaults_survive_a_round_trip_to_disk(home: Path) -> None:
     save_config(Config())
     reloaded = load_config()
     for field, expected in KNOB_DEFAULTS:
-        assert getattr(reloaded, field) == expected
+        assert _comparable(getattr(reloaded, field)) == _comparable(expected)
 
 
 @needs_config
@@ -415,7 +432,7 @@ def test_missing_config_file_yields_defaults(home: Path) -> None:
     assert not (home / "config.json").exists()
     cfg = load_config()
     for field, expected in KNOB_DEFAULTS:
-        assert getattr(cfg, field) == expected
+        assert _comparable(getattr(cfg, field)) == _comparable(expected)
 
 
 @needs_config

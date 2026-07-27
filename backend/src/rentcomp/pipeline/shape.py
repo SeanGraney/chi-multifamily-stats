@@ -282,6 +282,7 @@ def _build_comp(chain: Sequence[_Spell], suspect: bool, as_of: date, config: Con
         censored=censored,
         removal_class=removal_class,
         cohort_year=first.listed.year,
+        first_listed=first.listed,
         withdrawal_suspect=suspect,
         sqft_suspect=False,
         cut_history=tuple(cut_history),

@@ -323,7 +323,16 @@ class GuardResult(BaseModel):
     candidate_rent: float
     candidate_premium: Band[float]
     bucket: BucketId
-    reason: Literal["too_few_in_range", "all_censored"]
+    #: WS-1a: `curve_not_available` is a provisional third value, not an
+    #: F11-S3 trip reason. F11-S3's real trip rule is untouched (<3 usable
+    #: neighbors in range, or all censored) — but when neither holds, this
+    #: endpoint still has no `CurveResult` to return (F11-S2 doesn't exist
+    #: yet), and reporting one of the other two literals in that case would
+    #: be a stated reason with no evidence behind it (NORTH_STAR). This value
+    #: retires the moment F11-S2/F11-S3's guard-vs-curve branch selection
+    #: lands for real — the same provisional-marker convention as
+    #: `DerivedWarning(code="provisional_field")`.
+    reason: Literal["too_few_in_range", "all_censored", "curve_not_available"]
     neighbors: list[Neighbor]
 
 

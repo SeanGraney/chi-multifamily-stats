@@ -61,7 +61,7 @@ from rentcomp.models.responses import (
 from rentcomp.pipeline.anchor import anchor as anchor_stage
 from rentcomp.pipeline.buckets import bucket_of, bucket_stats
 from rentcomp.pipeline.cohorts import cohort_medians, median_by_year
-from rentcomp.pipeline.keys import comp_key
+from rentcomp.pipeline.keys import disambiguate_keys
 from rentcomp.pipeline.membership import classify_membership, distances_mi
 from rentcomp.pipeline.premium import compute_premiums
 from rentcomp.pipeline.pricetest import price_test
@@ -128,7 +128,7 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
     """One derivation pass, whole. The wiring is the diagram."""
     cfg, comps = ctx.config, ctx.comps
 
-    keys = [comp_key(comp.address, comp.unit) for comp in comps]
+    keys = disambiguate_keys(comps)
     psfs = [comp.psf for comp in comps]
     years = [comp.cohort_year for comp in comps]
 
@@ -321,8 +321,39 @@ def _warnings(
     The `stub_stage` entries are not decoration: they travel with the payload,
     so a placeholder number cannot reach a screen (or a screenshot) without
     the label that says what it is. They disappear as their stories land.
+
+    The `provisional_field` entries (WS-1a, ADR-002 finding 5) are the same
+    self-documenting convention applied to individual FIELDS rather than
+    whole stages: `sqft_suspect`, `premium_basis`, and `partial_pull` are all
+    honest defaults for what this pipeline actually computes today, not
+    placeholders standing in for a real number — but nothing signals they are
+    provisional until F5-S1/F4-S5/F4-S6 build the real computation each one
+    is a stand-in for. Each warning is unconditional (every derive carries
+    all three) and each disappears independently as its own story lands.
     """
-    warnings: list[DerivedWarning] = []
+    warnings: list[DerivedWarning] = [
+        DerivedWarning(
+            code="provisional_field",
+            message=(
+                "sqft_suspect is always false — the >30% cohort-median $/sqft deviation "
+                "flag (F5-S1) is not built yet."
+            ),
+        ),
+        DerivedWarning(
+            code="provisional_field",
+            message=(
+                "premium_basis is always \"selected\" — the pulled-set fallback for thin "
+                "cohorts (F4-S5) is not built yet."
+            ),
+        ),
+        DerivedWarning(
+            code="provisional_field",
+            message=(
+                "partial_pull is always null — gap tracking for incomplete pulls "
+                "(F4-S6/D24) is not built yet."
+            ),
+        ),
+    ]
 
     missing = [key for key, psf in zip(keys, psfs, strict=True) if psf is None]
     if missing:

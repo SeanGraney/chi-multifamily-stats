@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rentcomp"
+version = "0.1.0"
+description = "RentComp — local-only comp-based rent pricing tool (FastAPI backend, serves API + built UI)"
+requires-python = ">=3.12"
+# Runtime dependency budget per ARCHITECTURE.md §1a — these five, nothing else.
+# Exact pins live in requirements.txt (D9); floors here keep `pip install -e .` honest.
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pydantic>=2.7",
+    "httpx>=0.27",
+    "numpy>=1.26",
+]
+
+[project.scripts]
+# D7: one-command launch. Same code path as `python -m rentcomp`.
+rentcomp = "rentcomp.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

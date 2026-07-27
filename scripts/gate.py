@@ -8,10 +8,20 @@ address) against the LIVE RentCast API, within a hard-capped call budget.
 Run this BEFORE committing to the build (spec §9). It has no dependency
 on the not-yet-built `backend/` package; it's deliberately self-contained.
 
-Usage:
+Usage (two-phase run — spend 1 call, verify offline, then resume):
+    # Phase 1: spend exactly ONE live call, then hard-stop (exit 1, response kept)
     python scripts/gate.py --address "123 Main St, Chicago, IL 60614" \
         --bedrooms 2 --bathrooms 1 --radius 0.5 \
-        --window-start 06-15 --window-end 06-30 --years-back 2 --confirm
+        --window-start 06-15 --window-end 06-30 --years-back 2 \
+        --confirm --max-calls 1
+
+    # Phase 2: OFFLINE window-validation verdict against the saved response —
+    # zero API spend, no key needed (same args, swap --confirm for --verify-window)
+    python scripts/gate.py --address "..." ... --verify-window
+
+    # Phase 3: resume — the per-signature cache skips the already-paid call,
+    # so only the remaining queries are spent
+    python scripts/gate.py --address "..." ... --confirm
 
 Requires:
     RENTCAST_API_KEY in .env (mode 0600, never committed)
@@ -28,7 +38,7 @@ import hashlib
 import json
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
@@ -83,6 +93,69 @@ def compute_window(window_start: str, window_end: str, years_back: int) -> list[
     return windows
 
 
+def rentcast_range(min_value, max_value) -> str:
+    """RentCast numeric-range syntax: ONE param, colon-separated — `min:max`,
+    open-ended with `*` (`2000:*`, `*:10`).
+
+    A BARE single value (e.g. `daysOld=5`) is treated by RentCast as the range
+    MAXIMUM, not an exact match — so a degenerate range must still be emitted
+    as colon syntax (`5:5`), never bare. Fully unpinned (None, None) is a
+    caller bug, not a query: raise rather than emit `*:*`.
+
+    Shared syntax: bedrooms/bathrooms ranges use this identically (F0-S4 and
+    F2-S2 inherit this function).
+    """
+    if min_value is None and max_value is None:
+        raise ValueError("rentcast_range requires at least one bound (got None, None)")
+    lo = "*" if min_value is None else str(min_value)
+    hi = "*" if max_value is None else str(max_value)
+    return f"{lo}:{hi}"
+
+
+def rentcast_multi(values) -> str:
+    """RentCast multiple-value syntax: ONE param, pipe-separated —
+    `Multi-Family|Apartment|Townhouse`. Commas do not match anything.
+    Ranges and multi-values cannot be combined in one param."""
+    values = list(values)
+    if not values:
+        raise ValueError("rentcast_multi requires at least one value")
+    return "|".join(str(v) for v in values)
+
+
+def parse_listed_date(value):
+    """Parse a RentCast listedDate — ISO datetime ('2025-08-01T00:00:00.000Z')
+    or plain date ('2025-08-01') — to a date. Returns None if missing or
+    unparseable (a record we cannot verify)."""
+    if not isinstance(value, str) or len(value) < 10:
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def validate_window(records, w_start: date, w_end: date, pad_days: int = PAD_DAYS) -> dict:
+    """Offline check that returned records actually fall inside the requested
+    padded window: listedDate in [w_start - pad, w_end + pad], boundaries
+    INCLUSIVE (the daysOld range the gate requests is inclusive at both ends).
+
+    Records with a missing/unparseable listedDate cannot be verified: they go
+    to out_of_window and force ok=False. ok is True iff every record verifiably
+    falls inside the padded window — the go-signal for spending the remaining
+    calls after phase 1.
+    """
+    lo = w_start - timedelta(days=pad_days)
+    hi = w_end + timedelta(days=pad_days)
+    in_window, out_of_window = [], []
+    for record in records:
+        listed = parse_listed_date(record.get("listedDate"))
+        if listed is not None and lo <= listed <= hi:
+            in_window.append(record)
+        else:
+            out_of_window.append(record)
+    return {"in_window": in_window, "out_of_window": out_of_window, "ok": not out_of_window}
+
+
 def signature(params: dict) -> str:
     canonical = json.dumps(params, sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
@@ -90,6 +163,30 @@ def signature(params: dict) -> str:
 
 def raw_response_path(sig: str) -> Path:
     return FIXTURES_DIR / f"{sig}.json"
+
+
+def build_params(args, window: dict, status: str) -> dict:
+    """One (window x status) query. Single source of the wire params for both
+    the live run and the offline --verify-window pass — the two must produce
+    identical signatures or the cache/resume contract breaks."""
+    return {
+        "address": args.address,
+        "radius": args.radius,
+        "bedrooms": args.bedrooms,
+        "bathrooms": args.bathrooms,
+        # RentCast multi-value syntax is pipe-separated (CLI stays comma-separated)
+        "propertyType": rentcast_multi(v.strip() for v in args.property_types.split(",")),
+        "status": status,
+        # RentCast numeric ranges are colon syntax on ONE param — daysOldMin/Max don't exist
+        "daysOld": rentcast_range(window["daysOldMin"], window["daysOldMax"]),
+        "limit": 500,
+        # F4-S7 pagination question: ask for X-Total-Count on every response
+        "includeTotalCount": "true",
+    }
+
+
+def extract_records(data) -> list:
+    return data if isinstance(data, list) else data.get("listings", [])
 
 
 def call_rentcast(client: httpx.Client, params: dict, ledger: dict, max_calls: int) -> dict:
@@ -107,7 +204,17 @@ def call_rentcast(client: httpx.Client, params: dict, ledger: dict, max_calls: i
     print(f"  [LIVE CALL {ledger['calls_this_month'] + 1}/{max_calls}] {params}")
     resp = client.get("/listings/rental/long-term", params=params)
     ledger["calls_this_month"] += 1
-    ledger["history"].append({"sig": sig, "params": params, "status": resp.status_code})
+    # F4-S7 pagination evidence: persist X-Total-Count per call in the ledger
+    # history (sidecar metadata — the raw response body files stay raw, D24)
+    total_count = resp.headers.get("X-Total-Count")
+    if total_count is not None:
+        try:
+            total_count = int(total_count)
+        except ValueError:
+            pass  # keep the raw header string if it isn't an int
+    ledger["history"].append(
+        {"sig": sig, "params": params, "status": resp.status_code, "total_count": total_count}
+    )
     save_ledger(ledger)  # ledger increments at send time, not batch completion — D24
 
     resp.raise_for_status()
@@ -120,6 +227,56 @@ def call_rentcast(client: httpx.Client, params: dict, ledger: dict, max_calls: i
     tmp.replace(raw_response_path(sig))  # atomic write .tmp -> rename
 
     return data
+
+
+def run_verify_window(args) -> None:
+    """Phase 2 of the two-phase run: OFFLINE validation of already-fetched raw
+    responses against the padded window. Zero network, zero spend, no API key
+    needed. Exit 0 = safe to resume live spend; exit 1 = stop and re-check the
+    query design (or nothing fetched yet)."""
+    windows = compute_window(args.window_start, args.window_end, args.years_back)
+    print(f"Offline window validation for: {args.address} (zero API spend)")
+    print("NOTE: daysOld ranges (and thus cache signatures) depend on today's date — "
+          "run all phases on the same calendar day, or already-paid responses "
+          "won't match and would be re-paid.\n")
+    found = 0
+    missing = 0
+    all_ok = True
+    for w in windows:
+        w_start = month_day_in_year(args.window_start, w["year"])
+        w_end = month_day_in_year(args.window_end, w["year"])
+        for status in ("Active", "Inactive"):
+            params = build_params(args, w, status)
+            sig = signature(params)
+            cached = raw_response_path(sig)
+            if not cached.exists():
+                missing += 1
+                print(f"  {w['year']} {status}: not fetched yet ({sig}) — skipped")
+                continue
+            found += 1
+            records = extract_records(json.loads(cached.read_text()))
+            result = validate_window(records, w_start, w_end)
+            all_ok = all_ok and result["ok"]
+            print(f"  {w['year']} {status}: {len(result['in_window'])} in-window, "
+                  f"{len(result['out_of_window'])} out-of-window -> "
+                  f"{'OK' if result['ok'] else 'FAIL'}")
+            for r in result["out_of_window"][:5]:
+                print(f"      out: id={r.get('id')} listedDate={r.get('listedDate')!r}")
+
+    print(f"\nChecked {found} cached response(s); {missing} planned quer"
+          f"{'y' if missing == 1 else 'ies'} still unfetched.")
+    if found == 0:
+        print("VERDICT: NOTHING TO VALIDATE — no cached responses match these params. "
+              "Run phase 1 first (--confirm --max-calls 1).")
+        sys.exit(1)
+    if not all_ok:
+        print("VERDICT: WINDOW VALIDATION FAILED — records fall outside the padded window "
+              "or lack a verifiable listedDate. Do NOT spend further calls; "
+              "re-check the query design.")
+        sys.exit(1)
+    print("VERDICT: WINDOW VALIDATION OK — safe to resume the live run "
+          f"({missing} quer{'y' if missing == 1 else 'ies'} remaining; "
+          f"already-paid responses will be cache hits).")
 
 
 def main():
@@ -135,7 +292,15 @@ def main():
     parser.add_argument("--max-calls", type=int, default=10)
     parser.add_argument("--confirm", action="store_true",
                          help="Required. You are authorizing live API spend against the 50/month cap.")
+    parser.add_argument("--verify-window", action="store_true",
+                         help="OFFLINE mode: validate already-fetched raw responses against the "
+                              "padded window and exit. Spends nothing, needs no key or --confirm; "
+                              "takes precedence over --confirm if both are passed.")
     args = parser.parse_args()
+
+    if args.verify_window:
+        run_verify_window(args)
+        return
 
     if not args.confirm:
         print("Refusing to run without --confirm — this spends real API calls against the "
@@ -154,25 +319,18 @@ def main():
     print(f"Gate run for: {args.address}")
     print(f"Windows: {windows}")
     print(f"Ledger so far this month: {ledger['calls_this_month']} calls")
-    print(f"This run will spend at most {args.max_calls} more (hard stop).\n")
+    print(f"This run will spend at most {args.max_calls} more (hard stop).")
+    print("NOTE: daysOld ranges (and thus cache signatures) depend on today's date — "
+          "if resuming a prior run, resume on the SAME calendar day it started, "
+          "or already-paid responses won't be cache hits.\n")
 
     all_records = []
     with httpx.Client(base_url=RENTCAST_BASE, headers={"X-Api-Key": api_key}, timeout=30) as client:
         for w in windows:
             for status in ("Active", "Inactive"):
-                params = {
-                    "address": args.address,
-                    "radius": args.radius,
-                    "bedrooms": args.bedrooms,
-                    "bathrooms": args.bathrooms,
-                    "propertyType": args.property_types,
-                    "status": status,
-                    "daysOldMin": w["daysOldMin"],
-                    "daysOldMax": w["daysOldMax"],
-                    "limit": 500,
-                }
+                params = build_params(args, w, status)
                 data = call_rentcast(client, params, ledger, args.max_calls)
-                records = data if isinstance(data, list) else data.get("listings", [])
+                records = extract_records(data)
                 all_records.extend(records)
                 print(f"  {w['year']} {status}: {len(records)} records")
 

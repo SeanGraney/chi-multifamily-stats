@@ -1,7 +1,30 @@
 # ADR-001 — The derivation graph (`POST /api/derive`)
 
-**Story:** F0-S2 [INVARIANT] · **Status:** PROPOSED — awaiting owner sign-off · **Date:** 2026-07-26
+**Story:** F0-S2 [INVARIANT] · **Status:** ACCEPTED — owner signed off 2026-07-26 · **Date:** 2026-07-26
 **Author:** developer agent · **Decides for:** ~30 downstream stories (F4, F5, F7, F8, F9, F10, F11, F13, F14)
+
+> **Errata (PM-ruled, applied during F0-S2 implementation).** Two corrections
+> are folded into the text below and marked **[ERRATUM E1]** / **[ERRATUM E2]**
+> where they land:
+>
+> * **E1 — §4.2's no-I/O guard does not cover `client/`.** D17's fixture-mode
+>   RentCast client reads fixture files from disk *by design*, so scoping the
+>   guard to `pipeline/` + `stats/` is the correct rule; extending it to
+>   `client/` would forbid F0-S4's whole default mode. (The separate
+>   *no-`load_config`* guard from F0-S5 still covers `client/` and `models/` —
+>   that one is about knobs reaching the math as values, not about I/O.)
+> * **E2 — §1.2's "absent from every `comp_keys` list" means every AGGREGATE /
+>   EVIDENCE list; `$.breakdown.*` is exempt.** A comp with no sqft is excluded
+>   from every median, bucket and neighbour set **and** stays clickable from
+>   `breakdown.comp_keys["missing_sqft"]`. Excluding it from the breakdown too
+>   would make a counted set unreachable, which is the evidence-first invariant
+>   (T-S2) inverted.
+>
+> Also resolved, and recorded here so §6's open questions are not read as still
+> open: **Q1** pull date (owner), **Q2** option (b), guard trips at any band
+> edge (owner), **Q3** module constant `DRIFT_SENSITIVITY_PTS = 2.0` (PM),
+> **Q4** `pending | provisional | confirmed`, ARCHITECTURE §3's `leased`
+> superseded (PM), **Q5** no objection — the tuple landed in F0-S2.
 
 > *Method note:* the `engineering:architecture` skill is not installable in this
 > environment (no Skill tool). ADR discipline applied by hand: context → decision →
@@ -174,8 +197,18 @@ Three shape decisions worth naming:
   convention — an aggregate that can't name its comps won't compile.
 - **`premium: float | None` is first-class.** Real evidence: 14.7% of records have no
   `squareFootage`. Those comps appear in `comps` with `psf=None`, `premium=None`,
-  `bucket=None`, weight 0 by default, are absent from every `comp_keys` list, and are
+  `bucket=None`, weight 0 by default, are absent from every **aggregate/evidence**
+  `comp_keys` list, and are
   counted in `breakdown.missing_sqft` + a `warnings` entry. Never a crash, never a 0.
+  **[ERRATUM E2]** "every `comp_keys` list" read too broadly: **`$.breakdown.*` is
+  exempt.** `breakdown.comp_keys` maps each *count* to the comps it counted, so a
+  no-sqft comp must stay clickable from `missing_sqft` — excluding it there would
+  make a counted set unreachable, which is T-S2 inverted. What must not happen is a
+  comp with no premium being cited as *evidence* for a statistic, i.e. under
+  `$.cohorts[*]`, `$.buckets[*]`, `$.anchor`, or a neighbour set. Consequence taken in
+  implementation: a `warnings` entry carries **no `comp_keys` of its own** — it names a
+  key into `breakdown.comp_keys` instead, so the warning and the count it describes are
+  literally the same list and cannot disagree.
 
 **Nothing in the response is clock-derived or environment-derived** — no `computed_at`,
 no `elapsed_ms`. That is what makes the AC assertable on raw bytes (§4).
@@ -360,9 +393,15 @@ makes a stateful mistake either impossible or loud:
    guard: no `date.today`, `datetime.now`, `time.time`. Without this, every censored
    comp's DOM floor drifts a day at midnight and the AC is untestable. (This has a
    meaning consequence — see Q1.)
-2. **No I/O below the edge.** The same AST guard already forbids `load_config` in
-   `pipeline/stats/client/models`; extend it to `open`/`Path.read_*`. Every input arrives
-   as an argument; loading happens in `api/derive.py`.
+2. **No I/O below the edge.** The F0-S5 AST guard already forbids `load_config` in
+   `pipeline/stats/client/models`; a *second* guard forbids `open`/`Path.read_*` and
+   environment reads. **[ERRATUM E1]** the I/O guard is scoped to **`pipeline/` and
+   `stats/` only — not `client/`**: D17's fixture mode *is* reading fixture files from
+   disk, so including `client/` would forbid F0-S4's default and only-safe mode. (The
+   `load_config` guard still covers `client/` and `models/`; that one is about knobs
+   reaching the math as passed-in values, which is a different rule.) Every pipeline
+   input arrives as an argument; loading happens in `api/derive.py`, and the pull
+   loader + its memo live at the storage edge (`storage/pulls.py`).
 3. **Everything is frozen.** `DeriveRequest`, `Config`, `StitchedComp`, and the response
    models are `frozen=True`; Group A's output is a `tuple`. A stage cannot mutate an
    upstream artifact, so no stage can leave a footprint for the next request.

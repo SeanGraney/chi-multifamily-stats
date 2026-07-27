@@ -191,14 +191,22 @@ def test_derive_writes_nothing_to_the_workspace_home(derive, rentcomp_home) -> N
     """ADR-001 §4.7: the handler has no writer in scope. Workspace autosave is
     F14-S2's separate ``PUT /api/workspaces/{key}``. A derive that writes is a
     derive that can fail differently the second time."""
-    derive()  # warm-up: tolerate one-time lazy setup, if any
-    before = tree_snapshot(rentcomp_home)
+    empty = tree_snapshot(rentcomp_home)
+    assert empty == {}, "the fixture home did not start empty; this test cannot mean anything"
+
+    derive()
+    after_one = tree_snapshot(rentcomp_home)
+    assert after_one == {}, (
+        f"one derive created {sorted(after_one)} under RENTCOMP_HOME. Deriving is a read: "
+        "workspace autosave is F14-S2's separate PUT /api/workspaces/{key}."
+    )
+
     for drift in (0.0, 7.0, 12.0):
         derive(drift_pct=drift, candidate_rent=2100.0)
     after = tree_snapshot(rentcomp_home)
-    assert before == after, (
+    assert after == after_one, (
         "deriving changed files under RENTCOMP_HOME. Added/changed: "
-        f"{sorted(set(after) - set(before)) or sorted(k for k in after if before.get(k) != after[k])}"
+        f"{sorted(set(after) - set(after_one)) or sorted(k for k in after if after_one.get(k) != after[k])}"
     )
 
 

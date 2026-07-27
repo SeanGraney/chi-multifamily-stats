@@ -91,9 +91,21 @@ def assert_is_band(value: Any, where: str) -> None:
 def test_derive_endpoint_exists(app) -> None:
     """ARCHITECTURE.md §4 / ADR-001: one stateless ``POST /api/derive``.
 
-    Also pins the registration ordering note in ADR-001 §4: the router must
-    be included BEFORE the static-UI mount at ``/``, or the route disappears
-    the moment a UI build exists on disk.
+    Asked of the OpenAPI document, not ``app.routes``: FastAPI 0.140 keeps an
+    included router as a single nested ``_IncludedRouter`` entry rather than
+    flattening its routes into the table, so a route scan reports "missing"
+    for every router-registered endpoint. The OpenAPI document is also D12's
+    codegen input, so it is the more meaningful question.
+
+    **What this test does NOT cover** (corrected after the dev raised it;
+    reproduced independently): ADR-001 §4's registration-ORDER note. With the
+    router included *after* the static-UI mount at ``/``, ``app.openapi()``
+    still lists ``POST /api/derive`` while a real request is swallowed by the
+    mount and comes back **405** — schema presence and reachability are
+    different facts, and only a live request distinguishes them. That is
+    pinned by ``test_derive_dev.py::test_the_derive_route_survives_a_built_ui_
+    being_mounted_at_root``, which builds an app with a real ``index.html`` on
+    disk. Not duplicated here.
     """
     paths = app.openapi().get("paths") or {}
     api_paths = sorted(p for p in paths if p.startswith("/api"))
@@ -409,6 +421,13 @@ def test_a_comp_without_sqft_is_none_all_the_way_down(derived) -> None:
 
 
 def test_price_test_is_none_exactly_when_there_is_no_candidate_rent(derive) -> None:
+    """PM-accepted deviation from ADR-001 §1.2's "None iff candidate_rent is
+    None": the price test is ALSO None when there is no anchor, because a
+    candidate rent has no premium scale to be expressed against — the
+    alternative was fabricating a 0.0 premium band for a candidate the
+    evidence cannot place. The fixture pull has an anchor, so both directions
+    below still hold; the no-anchor case is the dev's
+    ``test_seam_the_price_test_needs_both_a_candidate_and_an_anchor``."""
     assert derive(candidate_rent=None).json()["price_test"] is None, (
         "price_test must be None when no candidate rent has been entered (Results view)"
     )

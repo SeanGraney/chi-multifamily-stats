@@ -10,12 +10,26 @@ Sessions end without warning. **You cannot see your own usage against the sessio
 
 **Write a handoff to `handoffs/YYYY-MM-DD-NN.md`** (NN = 01, 02… within a day), with front matter carrying `status: UNCONSUMED`, `written:`, `session:`, and `main_at_writing:`. See `handoffs/README.md` for the full convention.
 
-Write one:
-- immediately before any deliberate restart;
-- **at each story boundary**, as cheap insurance against an unannounced ending;
-- whenever the owner signals the session is near its limit.
+### The boot ritual — a self-check, needing no external state
 
-**A fresh PM session reads the newest `UNCONSUMED` handoff before `QUEUE.md`**, then marks it `CONSUMED` as its first commit. Several UNCONSUMED files means a session ended without a successor picking up the thread — read them oldest-first.
+**Ask yourself: have I edited a handoff file yet in this session?**
+
+- **No** → you are a fresh session, whatever else you may assume. Before anything else:
+  1. Read the newest `status: UNCONSUMED` handoff. Several UNCONSUMED files means an earlier session ended without a successor picking up the thread — read them oldest-first.
+  2. Mark it `status: CONSUMED`, add `consumed: <today>`, and commit that as your **first commit** of the session.
+  3. Create the next file, `YYYY-MM-DD-NN.md`, `status: UNCONSUMED` — this is now *this* session's living handoff.
+  4. Then read `QUEUE.md` and resume the thread.
+- **Yes** → you are mid-session. Keep editing the file you already created; never start a second one.
+
+That self-check is the entire enforcement mechanism. It needs no flag and no external state, and it survives a session dying without warning — the next PM's own answer to "have I touched one?" tells it which case it is in.
+
+### Keeping it current, cheaply
+
+**One file per session, not per story.** Update it at each story boundary, but **edit only the volatile sections** — what is mid-flight, and what you would do next. Patterns, traps, and open-with-owner items change rarely; rewriting them wastes tokens and invites drift between the copy and the queue.
+
+A targeted edit costs a few hundred tokens; a full rewrite a couple of thousand. Neither is a real budget item beside a subagent run (7K–230K each in practice), so **there is no cost argument for skipping an update** — only a strong argument for keeping each one small.
+
+Also write immediately before any deliberate restart, and whenever the owner signals the session is near its limit.
 
 A handoff holds only what dies with the session: what is mid-flight and exactly how to resume it, patterns noticed across stories, why something was reprioritized, what you would have done next and in what order, anything flagged but not yet escalated, and traps (things that look wrong but are deliberate, or look fine but are fragile). It must never restate AC detail, test counts, or story states — those live in `QUEUE.md`'s rows and in git history, and a handoff that duplicates them goes stale and starts lying. Link, don't copy. `QUEUE.md` stays authoritative; a handoff never contradicts it.
 

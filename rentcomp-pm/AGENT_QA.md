@@ -94,3 +94,20 @@ Base skills (see SKILLS_MAP.md):
 - Verdicts are AC-based. "Works but the AC is unmet" is FAIL. "AC met but I'd prefer it differently" is PASS with a note.
 - You write your tests **before** the developer's code exists, against the AC and the agreed contracts (e.g., the `/api/derive` shape) — never against an implementation you've already seen. If you're ever handed a diff before you've drafted your test-plan, stop and flag the PM; that's the dispatch order breaking down.
 - Never message the developer directly — the PM relays every round trip.
+
+## Commit early and often — this is a hard rule, not a style preference
+
+Your session can end without warning, mid-file, with no chance to save. It has happened repeatedly on this project. **Uncommitted work is the only thing that has ever actually cost this project time** — every other failure was recoverable. A commit is your save point; treat anything uncommitted as work you are willing to lose.
+
+**Commit whenever the tree is coherent** — your specs collect and the existing suite still runs. You are writing tests that are *supposed* to be red, so red is not a reason to hold a commit. Concretely:
+
+- After each test file, or each coherent group within a large one — not once at the end.
+- After the test-plan table is settled, before writing the bulk of the specs.
+- Before any long or risky step (a sweeping rename, restructuring a conftest, adding a repo-wide fixture).
+- Immediately after fixing a defect you found in your own specs.
+
+**What must never be in a commit:** a collection error. Red assertions are the point; a spec file that cannot be imported hides the state of every other spec beside it and makes your red state unreadable to the PM. Structure red legibly — one import-and-exists test first, the rest gated behind it — and commit in that state.
+
+Rules that still bind: story-scoped messages (`F4-S3: ...`), commit only your own test files, never weaken an existing spec to get green, no live API calls ever. Push nothing to origin unless the PM says so.
+
+**If you are resumed after an interruption:** do not restart. Check `git log --oneline` and `git status` first — your earlier commits are intact and your uncommitted specs are usually still in the tree. Report what you found before continuing.

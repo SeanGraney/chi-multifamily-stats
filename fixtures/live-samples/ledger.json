@@ -1,0 +1,101 @@
+{
+  "calls_this_month": 6,
+  "history": [
+    {
+      "sig": "cac96ac5a379f26c",
+      "params": {
+        "address": "3651 S Wood St, Chicago, IL 60609",
+        "radius": 1.0,
+        "bedrooms": "4",
+        "bathrooms": "1.5:2",
+        "propertyType": "Multi-Family|Apartment|Townhouse",
+        "status": "Active",
+        "daysOld": "1:88",
+        "limit": 500,
+        "includeTotalCount": "true"
+      },
+      "status": 200,
+      "total_count": 0
+    },
+    {
+      "sig": "dd91bafa4a1cf838",
+      "params": {
+        "address": "3651 S Wood St, Chicago, IL 60609",
+        "radius": 1.0,
+        "bedrooms": "4",
+        "bathrooms": "1.5:2",
+        "propertyType": "Multi-Family|Apartment|Townhouse",
+        "status": "Inactive",
+        "daysOld": "1:88",
+        "limit": 500,
+        "includeTotalCount": "true"
+      },
+      "status": 200,
+      "total_count": 0
+    },
+    {
+      "sig": "67dbf2b470773b7e",
+      "params": {
+        "address": "3651 S Wood St, Chicago, IL 60609",
+        "radius": 1.0,
+        "bedrooms": "4",
+        "bathrooms": "1.5:2",
+        "propertyType": "Multi-Family|Apartment|Townhouse",
+        "status": "Active",
+        "daysOld": "250:453",
+        "limit": 500,
+        "includeTotalCount": "true"
+      },
+      "status": 200,
+      "total_count": 0
+    },
+    {
+      "sig": "e9186e7aa771221b",
+      "params": {
+        "address": "3651 S Wood St, Chicago, IL 60609",
+        "radius": 1.0,
+        "bedrooms": "4",
+        "bathrooms": "1.5:2",
+        "propertyType": "Multi-Family|Apartment|Townhouse",
+        "status": "Inactive",
+        "daysOld": "250:453",
+        "limit": 500,
+        "includeTotalCount": "true"
+      },
+      "status": 200,
+      "total_count": 1
+    },
+    {
+      "sig": "f696e2535b13a65f",
+      "params": {
+        "address": "3651 S Wood St, Chicago, IL 60609",
+        "radius": 1.0,
+        "bedrooms": "4",
+        "bathrooms": "1.5:2",
+        "propertyType": "Multi-Family|Apartment|Townhouse",
+        "status": "Active",
+        "daysOld": "615:818",
+        "limit": 500,
+        "includeTotalCount": "true"
+      },
+      "status": 200,
+      "total_count": 0
+    },
+    {
+      "sig": "d513a8827d5266a8",
+      "params": {
+        "address": "3651 S Wood St, Chicago, IL 60609",
+        "radius": 1.0,
+        "bedrooms": "4",
+        "bathrooms": "1.5:2",
+        "propertyType": "Multi-Family|Apartment|Townhouse",
+        "status": "Inactive",
+        "daysOld": "615:818",
+        "limit": 500,
+        "includeTotalCount": "true"
+      },
+      "status": 200,
+      "total_count": 0
+    }
+  ]
+}

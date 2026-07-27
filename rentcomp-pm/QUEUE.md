@@ -1,8 +1,8 @@
 # Story Queue — live state
 
-**API call ledger (50/month hard cap):** used 0 · remaining 50 · reserved for gate ≤10 · reserved for owner's real pulls ~40. No live call without a ledger entry (WORKFLOW.md §6).
+**API call ledger (50/month hard cap):** used **6** · remaining **44** · gate reserve had ≤10 (4 unspent) · reserved for owner's real pulls ~40. No live call without a ledger entry (WORKFLOW.md §6). Detail ledger: `fixtures/live-samples/ledger.json`.
 
-**Planned spend (owner-authorized 2026-07-26):** gate run for subject `3651 S Wood St, Chicago, IL 60609` (4bd / 1.5ba, 1.0mi radius, window 07-28→08-20, 3 years back) = 3 windows × 2 statuses = **6 calls**. Two-phase execution: 1 call → verify returned `listedDate`s fall inside the requested window → remaining 5 only if windowing holds. Worst case if syntax is wrong: 1 call burned, 5 preserved.
+**Spent 2026-07-26 (owner-authorized):** gate run, subject `3651 S Wood St, Chicago, IL 60609` (4bd / ba `1.5:2` per owner call, 1.0mi, window 07-28→08-20, 3yr) = 6 calls, two-phase as planned. All HTTP 200, syntax verified working (`X-Total-Count` echoed). Result: **1 comp total → NO-GO**. Queue halted pending owner redesign decision.
 
 **Deadline: 7/29/2026** — the tool must be able to price a real unit by this date. Working beats pretty; see `PROJECT_MANAGER.md`'s "Deadline awareness."
 
@@ -17,7 +17,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 
 | # | Story | Lane | Blocked by | State | Notes |
 |---|---|---|---|---|---|
-| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **REGRESSION** | harness merged to main (ba13917), suite green; live run pending — story completes with GO/NO-GO verdict |
+| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **ESCALATED — NO-GO** | harness merged & green; live run 2026-07-26 returned 1 comp vs ≥15 threshold. Queue HALTED per ordering rule #1; redesign options with owner |
 | 1a | F0-S1a backend scaffold (uv, FastAPI, entry point) | INFRA | T-S3 | BLOCKED | |
 | 1b | F0-S1b frontend scaffold (Vite, Tailwind, codegen) | UI | F0-S1a | BLOCKED | needs FastAPI schema for codegen |
 | 2 | F0-S3 weighted stats | PIPE | T-S3 | BLOCKED | pure Python — parallel w/ #1a and #1b |
@@ -76,3 +76,5 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 2026-07-26 | T-S3 | QA handoff accepted: 18 tests on story/T-S3-qa @ f0c3fe7 (9 red = defects, 9 green = D24 pins); plan table complete, all L1, no-Playwright deviation approved. PM accepted QA judgment: ±90 boundaries inclusive; missing listedDate ⇒ verdict not ok. → IN_DEV |
 | 2026-07-26 | T-S3 | Dev handoff: story/T-S3 @ 6d1f31b+af09e4a — colon/pipe syntax via rentcast_range/rentcast_multi, --verify-window offline mode, X-Total-Count in ledger. 29/29 pytest green, 0 live calls. [DEFAULT]s logged. ⚠ operational: all run phases must share one calendar day (cache sig embeds today). → IN_REVIEW |
 | 2026-07-26 | T-S3 | QA PASS report accepted (29-row plan table verified, both PM checks done). Merge sequence executed: qa→dev→main (ba13917), branches deleted, suite green on main. Live run pending owner's bathrooms-param call. → REGRESSION |
+| 2026-07-26 | T-S3 | Owner set bathrooms to range `1.5:2` (AskUserQuestion). Live run executed two-phase: call #1 (2026 Active) → 0 records, HTTP 200, X-Total-Count 0 (filters applied server-side, not flood) → --verify-window OK → remaining 5 spent. 6/6 HTTP 200 |
+| 2026-07-26 | T-S3 | **NO-GO**: 1 comp in 3 years of windows (3630 S Hermitage Unit 2R, 4bd/2ba Apt, $2800, DOM 31 — found only because ba was a range; exact 1.5 would have returned zero). Server total_counts confirm sparsity is real, not a syntax artifact. Fixtures + decision record committed. Queue halted; escalated to owner with redesign options (radius / propertyType incl. Single Family / drop ba filter / broad-pull-then-window-locally) |

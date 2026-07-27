@@ -1,0 +1,38 @@
+[
+  {
+    "id": "3630-S-Hermitage-Ave,-Unit-2R,-Chicago,-IL-60609",
+    "formattedAddress": "3630 S Hermitage Ave, Unit 2R, Chicago, IL 60609",
+    "addressLine1": "3630 S Hermitage Ave",
+    "addressLine2": "Unit 2R",
+    "city": "Chicago",
+    "state": "IL",
+    "stateFips": "17",
+    "zipCode": "60609",
+    "county": "Cook",
+    "countyFips": "031",
+    "latitude": 41.827789,
+    "longitude": -87.669327,
+    "propertyType": "Apartment",
+    "bedrooms": 4,
+    "bathrooms": 2,
+    "squareFootage": 2200,
+    "status": "Inactive",
+    "price": 2800,
+    "listingType": "Standard",
+    "listedDate": "2025-06-02T00:00:00.000Z",
+    "removedDate": "2025-07-03T00:00:00.000Z",
+    "createdDate": "2025-06-03T00:00:00.000Z",
+    "lastSeenDate": "2025-07-02T05:08:58.564Z",
+    "daysOnMarket": 31,
+    "history": {
+      "2025-06-02": {
+        "event": "Rental Listing",
+        "price": 2800,
+        "listingType": "Standard",
+        "listedDate": "2025-06-02T00:00:00.000Z",
+        "removedDate": "2025-07-03T00:00:00.000Z",
+        "daysOnMarket": 31
+      }
+    }
+  }
+]

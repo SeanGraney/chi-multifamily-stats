@@ -19,7 +19,7 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 
 | # | Story | Lane | Blocked by | State | Notes |
 |---|---|---|---|---|---|
-| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **IN_DEV (round 2)** | NO-GO round 1 (1 comp). Owner chose broad-pull redesign + bedrooms 3:4; harness change in QA-first loop; 2 calls authorized |
+| 0 | T-S3 + F4-S7 — go/no-go gate + harness | TEST | — | **IN_REVIEW (round 2)** | NO-GO round 1 (1 comp). Owner chose broad-pull redesign + bedrooms 3:4; harness change in QA-first loop; 2 calls authorized |
 | 1a | F0-S1a backend scaffold (uv, FastAPI, entry point) | INFRA | T-S3 | BLOCKED | |
 | 1b | F0-S1b frontend scaffold (Vite, Tailwind, codegen) | UI | F0-S1a | BLOCKED | needs FastAPI schema for codegen |
 | 2 | F0-S3 weighted stats | PIPE | T-S3 | BLOCKED | pure Python — parallel w/ #1a and #1b |
@@ -82,3 +82,4 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 | 2026-07-26 | T-S3 | **NO-GO**: 1 comp in 3 years of windows (3630 S Hermitage Unit 2R, 4bd/2ba Apt, $2800, DOM 31 — found only because ba was a range; exact 1.5 would have returned zero). Server total_counts confirm sparsity is real, not a syntax artifact. Fixtures + decision record committed. Queue halted; escalated to owner with redesign options (radius / propertyType incl. Single Family / drop ba filter / broad-pull-then-window-locally) |
 | 2026-07-26 | T-S3 | **OWNER DECISION (round 2):** option 1 broad pull, AND bedrooms expanded to `3:4` — owner explicitly approved 3-bedroom comps in the pool ("yes we can do 3 or 4 bedrooms for sure ... expand the comp pool"). Rationale: 1-comp NO-GO shows filtered pool too thin. 2 calls authorized. Harness change dispatched QA-first, same story |
 | 2026-07-26 | T-S3 | Round-2 QA handoff accepted: 7 red tests on fresh story/T-S3-qa @ 1d49658 (test_gate_broad.py), 29 round-1 tests green. PM rulings: --verify-window + --days-old combination FORBIDDEN (explicit error); missing listedDate = out-of-window in broad verdict (accepted); no 2-call hard-cap test (only 2 signatures exist; PM runs --max-calls 2). → IN_DEV |
+| 2026-07-26 | T-S3 | Round-2 dev handoff: story/T-S3 @ 6b1f41e — broad mode, optional bathrooms, verify+days-old forbidden (exit 2), bare colon-less --days-old refused (dev guard, round-1 defect class), round-1 fixture signatures verified preserved. 44/44 green, 0 live calls. → IN_REVIEW |

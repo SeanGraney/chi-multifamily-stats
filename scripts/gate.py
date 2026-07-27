@@ -23,6 +23,16 @@ Usage (two-phase run — spend 1 call, verify offline, then resume):
     # so only the remaining queries are spent
     python scripts/gate.py --address "..." ... --confirm
 
+Broad-pull mode (round 2 — sparse markets): pass a literal daysOld range to
+pull broad (2 calls: Active + Inactive) and apply the seasonal windows
+LOCALLY at verdict time instead of on the wire:
+    python scripts/gate.py --address "..." --bedrooms 3:4 --radius 2.0 \
+        --property-types "Multi-Family,Apartment,Townhouse,Single Family,Condo" \
+        --window-start 07-28 --window-end 08-20 --years-back 3 \
+        --days-old 1:1095 --confirm
+(--bathrooms omitted => no bathrooms filter on the wire. --verify-window does
+not apply to broad pulls and is refused when combined with --days-old.)
+
 Requires:
     RENTCAST_API_KEY in .env (mode 0600, never committed)
     pip install httpx
@@ -165,24 +175,34 @@ def raw_response_path(sig: str) -> Path:
     return FIXTURES_DIR / f"{sig}.json"
 
 
-def build_params(args, window: dict, status: str) -> dict:
-    """One (window x status) query. Single source of the wire params for both
-    the live run and the offline --verify-window pass — the two must produce
-    identical signatures or the cache/resume contract breaks."""
-    return {
+def build_params(args, days_old: str, status: str) -> dict:
+    """One (daysOld-range x status) query. Single source of the wire params for
+    both the live run and the offline --verify-window pass — the two must
+    produce identical signatures or the cache/resume contract breaks.
+
+    `days_old` is already in RentCast colon syntax (computed per-year window,
+    or the operator's literal --days-old override in broad mode).
+
+    --bathrooms omitted => NO bathrooms key at all (not "", not "*:*") — the
+    server must not exclude records with missing bathroom data. Provided =>
+    verbatim passthrough (bare value = exact match, colon syntax = range).
+    Bedrooms likewise passes through verbatim ("3:4" stays "3:4")."""
+    params = {
         "address": args.address,
         "radius": args.radius,
         "bedrooms": args.bedrooms,
-        "bathrooms": args.bathrooms,
         # RentCast multi-value syntax is pipe-separated (CLI stays comma-separated)
         "propertyType": rentcast_multi(v.strip() for v in args.property_types.split(",")),
         "status": status,
         # RentCast numeric ranges are colon syntax on ONE param — daysOldMin/Max don't exist
-        "daysOld": rentcast_range(window["daysOldMin"], window["daysOldMax"]),
+        "daysOld": days_old,
         "limit": 500,
         # F4-S7 pagination question: ask for X-Total-Count on every response
         "includeTotalCount": "true",
     }
+    if args.bathrooms is not None:
+        params["bathrooms"] = args.bathrooms
+    return params
 
 
 def extract_records(data) -> list:
@@ -246,7 +266,7 @@ def run_verify_window(args) -> None:
         w_start = month_day_in_year(args.window_start, w["year"])
         w_end = month_day_in_year(args.window_end, w["year"])
         for status in ("Active", "Inactive"):
-            params = build_params(args, w, status)
+            params = build_params(args, rentcast_range(w["daysOldMin"], w["daysOldMax"]), status)
             sig = signature(params)
             cached = raw_response_path(sig)
             if not cached.exists():
@@ -282,13 +302,24 @@ def run_verify_window(args) -> None:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--address", required=True)
-    parser.add_argument("--bedrooms", required=True)
-    parser.add_argument("--bathrooms", required=True)
+    parser.add_argument("--bedrooms", required=True,
+                         help="Verbatim RentCast value — bare for exact match, colon syntax "
+                              "for a range (e.g. '3:4').")
+    parser.add_argument("--bathrooms", default=None,
+                         help="Optional. Omitted => NO bathrooms filter on the wire at all "
+                              "(records with missing bathroom data are not excluded server-side). "
+                              "Provided => verbatim passthrough.")
     parser.add_argument("--radius", type=float, default=0.5)
     parser.add_argument("--property-types", default="Multi-Family,Apartment,Townhouse")
     parser.add_argument("--window-start", required=True, help="MM-DD")
     parser.add_argument("--window-end", required=True, help="MM-DD")
     parser.add_argument("--years-back", type=int, default=2)
+    parser.add_argument("--days-old", default=None,
+                         help="BROAD-PULL override: a literal RentCast daysOld range string "
+                              "(e.g. '1:1095'). One call per status (2 total) with this exact "
+                              "range — no computed per-year windows on the wire; the seasonal "
+                              "windows are applied LOCALLY at verdict time instead. Cache "
+                              "signatures become date-independent on this path.")
     parser.add_argument("--max-calls", type=int, default=10)
     parser.add_argument("--confirm", action="store_true",
                          help="Required. You are authorizing live API spend against the 50/month cap.")
@@ -297,6 +328,26 @@ def main():
                               "padded window and exit. Spends nothing, needs no key or --confirm; "
                               "takes precedence over --confirm if both are passed.")
     args = parser.parse_args()
+
+    if args.verify_window and args.days_old:
+        # PM ruling (T-S3 round 2): strict window verification is meaningless for
+        # a broad pull — it would flag every record outside the seasonal windows,
+        # but a broad pull DELIBERATELY fetches those and windows locally at
+        # verdict time instead.
+        print("FATAL: --verify-window cannot be combined with --days-old. Strict window "
+              "verification only applies to computed per-year window pulls; a broad pull "
+              "intentionally returns records outside the seasonal windows and is windowed "
+              "locally when the verdict is computed. Drop one of the two flags.")
+        sys.exit(2)
+
+    if args.days_old is not None and ":" not in args.days_old:
+        # Guard against the round-1 defect class at the operator interface:
+        # RentCast treats a bare daysOld value as the range MAXIMUM, not an
+        # exact match — a literal override must always be explicit colon syntax.
+        print(f"FATAL: --days-old must be a colon range string (e.g. '1:1095'), "
+              f"got {args.days_old!r}. RentCast treats a bare daysOld value as the "
+              f"range MAXIMUM, so a bare value is ambiguous — write the range explicitly.")
+        sys.exit(2)
 
     if args.verify_window:
         run_verify_window(args)
@@ -316,28 +367,104 @@ def main():
     ledger = load_ledger()
     windows = compute_window(args.window_start, args.window_end, args.years_back)
 
+    # The wire plan: broad mode is ONE literal daysOld range (2 calls total);
+    # windowed mode is one computed range per year back (2 * years_back calls).
+    if args.days_old:
+        wire_plan = [("broad", args.days_old)]
+    else:
+        wire_plan = [(str(w["year"]), rentcast_range(w["daysOldMin"], w["daysOldMax"]))
+                     for w in windows]
+
     print(f"Gate run for: {args.address}")
-    print(f"Windows: {windows}")
+    print(f"Windows: {windows}" + (" (applied LOCALLY at verdict time — broad pull)"
+                                   if args.days_old else ""))
     print(f"Ledger so far this month: {ledger['calls_this_month']} calls")
     print(f"This run will spend at most {args.max_calls} more (hard stop).")
-    print("NOTE: daysOld ranges (and thus cache signatures) depend on today's date — "
-          "if resuming a prior run, resume on the SAME calendar day it started, "
-          "or already-paid responses won't be cache hits.\n")
+    if args.days_old:
+        print(f"BROAD PULL: literal daysOld={args.days_old} — cache signatures are "
+              f"date-independent; resuming on a later day is safe.\n")
+    else:
+        print("NOTE: daysOld ranges (and thus cache signatures) depend on today's date — "
+              "if resuming a prior run, resume on the SAME calendar day it started, "
+              "or already-paid responses won't be cache hits.\n")
 
     all_records = []
     with httpx.Client(base_url=RENTCAST_BASE, headers={"X-Api-Key": api_key}, timeout=30) as client:
-        for w in windows:
+        for label, days_old in wire_plan:
             for status in ("Active", "Inactive"):
-                params = build_params(args, w, status)
+                params = build_params(args, days_old, status)
                 data = call_rentcast(client, params, ledger, args.max_calls)
                 records = extract_records(data)
                 all_records.extend(records)
-                print(f"  {w['year']} {status}: {len(records)} records")
+                print(f"  {label} {status}: {len(records)} records")
 
     # crude usability count — real stitching/dedupe happens in F4, this is a sanity signal only
-    unique_addrs = {r.get("formattedAddress") or r.get("id") for r in all_records}
+    def distinct_keys(records):
+        return {r.get("formattedAddress") or r.get("id") for r in records}
+
+    unique_addrs = distinct_keys(all_records)
     print(f"\nTotal raw records: {len(all_records)}")
     print(f"Distinct addresses/ids: {len(unique_addrs)}")
+
+    if args.days_old:
+        # Broad mode: the seasonal windows the wire no longer enforces are
+        # applied LOCALLY here — the verdict basis is distinct comps whose
+        # listedDate lands in ANY padded per-year window (validate_window
+        # semantics: ±PAD_DAYS, boundaries inclusive). Records with missing/
+        # unparseable listedDate can't be verified in-window: excluded from
+        # the verdict count, NOT an error (they stay in the raw fixtures).
+        per_window = []
+        in_window_keys = set()
+        for w in windows:
+            w_start = month_day_in_year(args.window_start, w["year"])
+            w_end = month_day_in_year(args.window_end, w["year"])
+            result = validate_window(all_records, w_start, w_end)
+            keys = distinct_keys(result["in_window"])
+            per_window.append((w["year"], len(keys)))
+            in_window_keys |= keys
+        in_window_count = len(in_window_keys)
+        per_window_lines = "\n".join(
+            f"- {year} window: {count} in-window distinct comps"
+            for year, count in per_window
+        )
+        print(f"In-window distinct comps (verdict basis): {in_window_count}")
+
+        verdict = ("GO" if in_window_count >= 15
+                   else "NO-GO — insufficient in-window comp coverage")
+        decision = f"""# T-S3 Go/No-Go Gate — Decision Record (broad pull)
+
+**Run date:** {date.today().isoformat()}
+**Subject:** {args.address}
+**Mode:** broad pull — literal daysOld={args.days_old}; seasonal windows applied locally
+**Window (year-agnostic):** {args.window_start}..{args.window_end}, {args.years_back} years back, padded ±{PAD_DAYS}d inclusive
+**Calls on ledger this month:** {ledger['calls_this_month']}
+**Raw records pulled:** {len(all_records)}
+**Raw distinct addresses/ids (diagnostic only):** {len(unique_addrs)}
+**In-window distinct comps (verdict basis):** {in_window_count}
+
+Per-window in-window distinct counts:
+{per_window_lines}
+
+**Verdict: {verdict}**
+
+(Threshold: >=15 distinct comps whose listedDate lands inside ANY padded
+seasonal window — the same ±{PAD_DAYS}-day inclusive windows a windowed pull
+would have requested on the wire, applied locally to the broad pull instead.
+Records with a missing or unparseable listedDate cannot be verified in-window:
+they are excluded from the verdict count but are NOT an error — they remain in
+the raw fixture data for the F4 pipeline to handle. Distinctness rule:
+formattedAddress, falling back to id — same as the windowed-mode raw count.)
+
+Raw responses saved to `fixtures/live-samples/` — these seed the entire build's
+fixture-mode development going forward (WORKFLOW.md §6).
+"""
+        DECISION_PATH.parent.mkdir(parents=True, exist_ok=True)
+        DECISION_PATH.write_text(decision)
+        print(f"\nDecision record written to {DECISION_PATH}")
+        print(f"\n{verdict}")
+        if verdict.startswith("NO-GO"):
+            sys.exit(1)
+        return
 
     verdict = "GO" if len(unique_addrs) >= 15 else "NO-GO — insufficient comp coverage"
     decision = f"""# T-S3 Go/No-Go Gate — Decision Record

@@ -111,10 +111,12 @@ def test_as_of_is_exactly_the_pulls_fetch_date(derived) -> None:
     assert date.fromisoformat(derived["meta"]["as_of"]) < date.today()
 
 
-def test_meta_reports_the_ref_it_derived_and_a_digest_of_the_evidence(derived, derive) -> None:
-    assert derived["meta"]["pull_ref"] == "synthetic-basic"
+def test_meta_reports_the_ref_it_derived_and_a_digest_of_the_evidence(
+    derived, derive, pull_ref, perf_pull_ref
+) -> None:
+    assert derived["meta"]["pull_ref"] == pull_ref
     assert len(derived["meta"]["pull_digest"]) == 64, "expected a sha256 hex digest"
-    other = derive(pull_ref="synthetic-100").json()
+    other = derive(pull_ref=perf_pull_ref).json()
     assert other["meta"]["pull_digest"] != derived["meta"]["pull_digest"], (
         "two different pulls share a digest — a memo keyed on it could serve one for the other"
     )
@@ -236,7 +238,7 @@ def test_the_cohort_median_moves_when_the_selection_moves(derive, derived) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_the_record_shaping_memo_is_a_pure_function_cache(rentcomp_home) -> None:
+def test_the_record_shaping_memo_is_a_pure_function_cache(rentcomp_home, pull_ref) -> None:
     """The one piece of process-level state near this endpoint. It is keyed on
     every input that can change the answer — including `Config`, because
     "a knob change re-derives like any other input" (F0-S5) — and it is a pure
@@ -245,20 +247,20 @@ def test_the_record_shaping_memo_is_a_pure_function_cache(rentcomp_home) -> None
     from rentcomp.storage.pulls import load_shaped_pull
 
     load_shaped_pull.cache_clear()
-    first = load_shaped_pull("synthetic-basic", Config())
-    assert load_shaped_pull("synthetic-basic", Config()) is first, "memo did not hit"
+    first = load_shaped_pull(pull_ref, Config())
+    assert load_shaped_pull(pull_ref, Config()) is first, "memo did not hit"
     assert load_shaped_pull.cache_info().hits >= 1
 
-    other_knobs = load_shaped_pull("synthetic-basic", Config(knn_k=11))
+    other_knobs = load_shaped_pull(pull_ref, Config(knn_k=11))
     assert other_knobs is not first, "the memo ignored a knob change"
     assert other_knobs == first, "shaping is not knob-dependent yet, so the value must agree"
 
     load_shaped_pull.cache_clear()
-    assert load_shaped_pull("synthetic-basic", Config()) is not first
-    assert load_shaped_pull("synthetic-basic", Config()) == first
+    assert load_shaped_pull(pull_ref, Config()) is not first
+    assert load_shaped_pull(pull_ref, Config()) == first
 
 
-def test_the_memo_notices_the_pull_store_moving(tmp_path, monkeypatch) -> None:
+def test_the_memo_notices_the_pull_store_moving(tmp_path, monkeypatch, pull_ref) -> None:
     """The store root is resolved per call and is part of the memo key: an E2E
     harness points it at a temp directory *after* this module was imported, and
     a memo keyed only on the ref would keep serving the pull from wherever the
@@ -267,16 +269,16 @@ def test_the_memo_notices_the_pull_store_moving(tmp_path, monkeypatch) -> None:
     from rentcomp.storage.pulls import PullNotFoundError, load_shaped_pull
 
     load_shaped_pull.cache_clear()
-    real = load_shaped_pull("synthetic-basic", Config())
+    real = load_shaped_pull(pull_ref, Config())
 
     empty = tmp_path / "elsewhere"
     empty.mkdir()
     monkeypatch.setenv("RENTCOMP_FIXTURE_PULLS_DIR", str(empty))
     with pytest.raises(PullNotFoundError):
-        load_shaped_pull("synthetic-basic", Config())
+        load_shaped_pull(pull_ref, Config())
 
     monkeypatch.delenv("RENTCOMP_FIXTURE_PULLS_DIR")
-    assert load_shaped_pull("synthetic-basic", Config()) == real
+    assert load_shaped_pull(pull_ref, Config()) == real
 
 
 def test_an_absent_pull_raises_rather_than_returning_an_empty_market() -> None:
@@ -300,13 +302,12 @@ def test_the_config_digest_changes_with_the_knobs_and_not_with_their_order() -> 
     )
 
 
-def test_the_perf_pull_is_a_realistic_shape_not_a_padded_one(derive) -> None:
+def test_the_perf_pull_is_a_realistic_shape_not_a_padded_one(derive, perf_pull_ref) -> None:
     """A 100-comp fixture that is 100 identical comps would make the AC2
     measurement meaningless — the chain's cost is in the branches."""
-    payload = derive(pull_ref="synthetic-100").json()
+    payload = derive(pull_ref=perf_pull_ref).json()
     comps = payload["comps"]
-    assert len(comps) == 100
-    assert len({c["key"] for c in comps}) == 100
+    assert len({c["key"] for c in comps}) == len(comps), "the perf pull repeats a comp"
     assert any(c["sqft"] is None for c in comps)
     assert any(c["censored"] for c in comps)
     assert len({c["cohort_year"] for c in comps}) >= 2

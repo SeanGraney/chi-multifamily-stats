@@ -19,12 +19,21 @@ WHAT IS REAL IN F0-S2
   withdrawal-suspect) and the censored DOM *floors*, which are listed
   separately from any leased statistic and never mixed into one.
 
-WHAT IS STUBBED (F10-S1 owns it) — see `_STUB_OUTCOME_STATS`.
+WHAT F10-S1 ADDS — the outcome statistics
+------------------------------------------
+`leased_dom_median/min/max` and `cut_before_lease_rate`, over the LEASED set
+of a bucket's members: `removal_class in ("provisional", "confirmed")` —
+pending removals are *excluded entirely* (not merely marked, NORTH_STAR),
+and censored comps are never counted as leased (their DOM-so-far is a floor,
+reported separately in `censored_floors`). An empty leased set reports
+`None` on every outcome statistic — never `0`/`0.0`, which would read as a
+real computed value for zero evidence.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from statistics import median
 
 from rentcomp.models.domain import StitchedComp
 from rentcomp.models.responses import Anchor, Band, BucketId, BucketStat
@@ -34,19 +43,10 @@ __all__ = ["BUCKET_IDS", "bucket_of", "bucket_stats", "premium_bounds"]
 #: Render order, always all three.
 BUCKET_IDS: tuple[BucketId, ...] = ("below", "at", "above")
 
-#: PLACEHOLDER RULE (F0-S2 → replaced by F10-S1): every *outcome* statistic of
-#: a bucket — the leased-DOM median/min/max and the cut-before-lease rate — is
-#: reported as `None`, in every bucket, however many comps it holds.
-#:
-#: `None` is not a fabrication: it is the exact value an empty bucket reports,
-#: and the view already renders it as a dash. So a stubbed bucket looks like a
-#: bucket with no evidence — never like a bucket with an answer. Computing
-#: these requires F10-S1's exclusion rules (pendings are *excluded* from
-#: aggregates, not merely marked; censored floors are never counted as leased),
-#: and those rules are that story's [INVARIANT], not something to guess at
-#: here: a wrong-but-plausible median would silently inflate apparent lease
-#: velocity, which is the specific failure NORTH_STAR names.
-_STUB_OUTCOME_STATS = True
+#: The removal classes counted as "leased" for outcome statistics (F10-S1).
+#: `pending` is excluded entirely; `None` (still active/censored) never
+#: reaches this set at all.
+_LEASED_CLASSES = frozenset({"provisional", "confirmed"})
 
 
 def premium_bounds(
@@ -109,6 +109,8 @@ def bucket_stats(
         ]
         member_keys = [key for _, key in members]
         premium_min, premium_max = premium_bounds(bucket_id, half_width_pct)
+        leased = [comp for comp, _ in members if comp.removal_class in _LEASED_CLASSES]
+        leased_doms = sorted(comp.effective_dom for comp in leased)
         stats.append(
             BucketStat(
                 id=bucket_id,
@@ -117,10 +119,14 @@ def bucket_stats(
                 dollar_min=_dollars(anchor_value, premium_min),
                 dollar_max=_dollars(anchor_value, premium_max),
                 count=len(member_keys),
-                leased_dom_median=None,  # _STUB_OUTCOME_STATS (F10-S1)
-                leased_dom_min=None,  # _STUB_OUTCOME_STATS (F10-S1)
-                leased_dom_max=None,  # _STUB_OUTCOME_STATS (F10-S1)
-                cut_before_lease_rate=None,  # _STUB_OUTCOME_STATS (F10-S1)
+                leased_dom_median=float(median(leased_doms)) if leased_doms else None,
+                leased_dom_min=leased_doms[0] if leased_doms else None,
+                leased_dom_max=leased_doms[-1] if leased_doms else None,
+                cut_before_lease_rate=(
+                    sum(1 for comp in leased if comp.cut_history) / len(leased)
+                    if leased
+                    else None
+                ),
                 provisional_count=sum(
                     1 for comp, _ in members if comp.removal_class == "provisional"
                 ),

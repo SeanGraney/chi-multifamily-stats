@@ -1,10 +1,9 @@
 """1-D neighbour retrieval over premium — F11-S1.
 
-**STUB (F0-S2).** This module currently pins the *interface* and returns no
-neighbours. See `PLACEHOLDER` below. F11-S1 implements retrieval; D19 already
-fixes how ("no library, two lines of numpy: ``d = np.abs(premiums -
-candidate); idx = np.argsort(d, kind='stable')[:k]``" — `kind="stable"`
-satisfies that story's deterministic-tie AC).
+D19's default, implemented as written: two lines of numpy, `argsort` with
+`kind="stable"` so tied distances break deterministically (by original
+index, i.e. insertion order) rather than however an unstable partition
+happens to land.
 
 WHY THIS MODULE IS DELIBERATELY IGNORANT
 ----------------------------------------
@@ -29,6 +28,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import numpy as np
+
 __all__ = ["select_neighbors"]
 
 
@@ -37,10 +38,14 @@ def select_neighbors(
 ) -> list[int]:
     """Indices of the `k` comps nearest the candidate in premium space.
 
-    PLACEHOLDER RULE (F0-S2 → replaced by F11-S1): **returns no indices at
-    all**, for any input. Nothing here approximates a neighbourhood: an empty
-    result makes the price test honestly evidence-thin (zero neighbours *is*
-    "too few in range") instead of fabricating a set of comps that would look
-    like retrieved evidence in the UI and in a screenshot.
+    D19: `d = |premiums - candidate|`, then a stable argsort so ties break
+    the same way every time (reproducibility is the AC, not a specific
+    winner). Distance is the *only* thing computed here — no comp record, no
+    outcome, ever enters this function (D19a; see the module docstring and
+    the AST guard in `test_ws1_knn_retrieval.py`).
     """
-    return []
+    if not premiums:
+        return []
+    distances = np.abs(np.asarray(premiums, dtype=float) - candidate_premium)
+    order = np.argsort(distances, kind="stable")
+    return [int(index) for index in order[: max(k, 0)]]

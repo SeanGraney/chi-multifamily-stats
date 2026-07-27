@@ -83,11 +83,16 @@ __all__ = [
 DRIFT_SENSITIVITY_PTS = 2.0
 
 #: Bumped when the derivation changes in a way that changes output values.
-#: `-stubs` is deliberate and load-bearing: several stages are placeholders in
-#: F0-S2 (anchor → F8-S1, bucket outcome stats → F10-S1, kNN → F11-S1, guard →
-#: F11-S3, curve → F11-S2, record shaping → F4-S3), and the version string
-#: says so in every payload.
-PIPELINE_VERSION = "0.1.0-f0-s2+stubs"
+#: WS-1 replaces record shaping (F4-S3/S4/S8), the anchor (F8-S1), bucket
+#: outcome stats (F10-S1) and kNN retrieval (F11-S1) with real
+#: implementations, so the `-stubs` marker (and the `stub_stage` warnings
+#: that went with it) retire here. What remains genuinely unbuilt — the
+#: Kaplan-Meier curve (F11-S2) and F11-S3's guard-vs-curve branch selection —
+#: is not a stubbed *number* the way the others were: the price test always
+#: returns the guard branch (`GuardResult`), which is the honest terminal
+#: state NORTH_STAR names for evidence this thin, not a placeholder standing
+#: in for a curve. See `pipeline/pricetest.py`.
+PIPELINE_VERSION = "0.1.0-ws1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,41 +350,4 @@ def _warnings(
             )
         )
 
-    warnings.extend(_STUB_WARNINGS)
     return warnings
-
-
-#: One entry per stubbed stage: what is provisional, and which story replaces
-#: it. Built once (module-level constant of frozen models) because it is the
-#: same in every response — no per-request state lives here.
-_STUB_WARNINGS: tuple[DerivedWarning, ...] = (
-    DerivedWarning(
-        code="stub_stage",
-        message=(
-            "Record shaping is a placeholder (F4-S3): comps are read from a pre-shaped "
-            "synthetic pull rather than stitched from raw RentCast responses."
-        ),
-    ),
-    DerivedWarning(
-        code="stub_stage",
-        message=(
-            "The anchor is a placeholder (F8-S1): $/sqft is the sentinel 1.00 with no drift "
-            "adjustment, so anchor rent equals the subject's sqft and the sensitivity band "
-            "is degenerate. Not a market estimate."
-        ),
-    ),
-    DerivedWarning(
-        code="stub_stage",
-        message=(
-            "Bucket outcome statistics are not computed yet (F10-S1): leased-DOM "
-            "median/min/max and the cut-before-lease rate are null in every bucket."
-        ),
-    ),
-    DerivedWarning(
-        code="stub_stage",
-        message=(
-            "The price test is a placeholder (F11-S1 retrieval, F11-S3 guard, F11-S2 curve): "
-            "no neighbours are retrieved, so it always reports insufficient evidence."
-        ),
-    ),
-)

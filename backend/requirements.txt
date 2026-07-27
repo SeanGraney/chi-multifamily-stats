@@ -1,0 +1,9 @@
+# Pinned runtime dependencies (ARCHITECTURE.md D9, dependency budget §1a).
+# Exactly the five sanctioned backend runtime deps — nothing else may be
+# added without checking the budget first. Install into the repo-root .venv:
+#   .venv/bin/pip install -r backend/requirements.txt -e backend/
+fastapi==0.140.0
+uvicorn==0.51.0
+pydantic==2.13.4
+httpx==0.28.1
+numpy==2.5.1

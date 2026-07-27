@@ -9,12 +9,23 @@ Resolution goes through exactly one function so the thing behind it can be
 replaced without an API change:
 
     F0-S2 (now)   a pre-shaped synthetic pull, read from `fixtures/synthetic/pulls/`
-    F3-S1 + F4-S3 the real cache (`~/.rentcomp/cache/<key>/`) — immutable raw
-                  RentCast responses, run through the stitcher
+    WS-1          ONE named real ref (`WS1_REAL_PULL_REF`), routed through
+                  the real record-shaping chain (`pipeline.shape.shape_raw_pull`)
+                  over the two committed T-S3 gate fixtures
+                  (`fixtures/live-samples/`) — see `_load_ws1_real_pull` below
+    F3-S1 + F4-S3 the real cache (`~/.rentcomp/cache/<key>/`) — every pull,
+                  general-purpose, resolved by content-hashed cache key
 
-**STUB (F0-S2):** `_shape()` parses records that are *already* shaped. The
-stitcher (dedupe → spells → stitch → classify → window → cohort) is F4-S3, and
-nothing here approximates it — see `_STUB_RECORD_SHAPING`.
+WS-1's WIRING (contract item 3, PM-confirmed — see the WS-1 handoff): a
+`pull_ref` of `WS1_REAL_PULL_REF` ("ws1-real") is special-cased in
+`_shaped_pull` before the pre-shaped-JSON path runs. It is not a
+`fixtures/synthetic/pulls/*.json` file at all — it reads the two REAL raw
+RentCast responses the T-S3 gate committed, shapes them for real, and
+returns `ShapedPull` exactly like every other ref. This is deliberately
+independent of `FIXTURE_PULLS_ENV`/`fixture_pulls_dir()`: `live-samples/` is
+a fixed location relative to the repo, not a synthetic-pulls directory an
+E2E harness redirects, so the Playwright spec that drives the real built app
+against a fresh `RENTCOMP_HOME` finds it with zero extra seeding.
 
 WHY THE I/O IS HERE AND NOT IN `pipeline/`
 ------------------------------------------
@@ -43,10 +54,12 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from rentcomp.models.domain import StitchedComp
+from rentcomp.pipeline.shape import shape_raw_pull
 from rentcomp.storage.config import Config
 
 __all__ = [
     "FIXTURE_PULLS_ENV",
+    "WS1_REAL_PULL_REF",
     "PullNotFoundError",
     "ShapedPull",
     "config_digest",
@@ -57,17 +70,23 @@ __all__ = [
 #: Overrides where synthetic pulls are read from (tests, E2E harnesses).
 FIXTURE_PULLS_ENV = "RENTCOMP_FIXTURE_PULLS_DIR"
 
-#: PLACEHOLDER RULE (F0-S2 → replaced by F4-S3 + F3-S1): a "pull" is a single
-#: JSON document holding a fetch date and records that are already in
-#: `StitchedComp` shape. No dedupe, no spell reconstruction, no 42-day re-list
-#: stitching, no censoring classification happens — the fixture author states
-#: those outcomes and this module validates them.
-#:
-#: The point of the stub is that it fabricates *nothing*: it derives no DOM, no
-#: censoring flag and no removal class from anything. It reads what a fixture
-#: asserts. When F4-S3 lands, the same `load_shaped_pull` contract is satisfied
-#: from raw RentCast responses instead, and no caller changes.
-_STUB_RECORD_SHAPING = True
+#: WS-1's one named real pull (contract item 3 — see module docstring). The
+#: frontend's hardcoded Results-view request uses exactly this ref.
+WS1_REAL_PULL_REF = "ws1-real"
+
+#: The T-S3 gate's committed raw fixtures WS1_REAL_PULL_REF shapes — the
+#: exact pull that GO'd at 337 in-window comps (QUEUE.md row 6). Paths
+#: resolved relative to this file, like `fixture_pulls_dir()`, so they are
+#: found regardless of `RENTCOMP_HOME`/`FIXTURE_PULLS_ENV`.
+_LIVE_SAMPLES_DIR = Path(__file__).resolve().parents[4] / "fixtures" / "live-samples"
+_WS1_ACTIVE_FIXTURE = _LIVE_SAMPLES_DIR / "fe9de5158f036802.json"
+_WS1_INACTIVE_FIXTURE = _LIVE_SAMPLES_DIR / "6327600317b11d16.json"
+
+#: PM scope ruling (QUEUE.md row 6) / the WS-1 handoff: `as_of` matches the
+#: fixtures' own `lastSeenDate` timestamps, and the window is read literally
+#: as the full calendar year (no month-day narrowing was specified).
+_WS1_AS_OF = date(2026, 7, 27)
+_WS1_WINDOW = ("01-01", "12-31")
 
 
 class PullNotFoundError(LookupError):
@@ -147,6 +166,9 @@ def load_shaped_pull(pull_ref: str, config: Config) -> ShapedPull:
 
 @lru_cache(maxsize=4)
 def _shaped_pull(root: Path, pull_ref: str, config: Config) -> ShapedPull:
+    if pull_ref == WS1_REAL_PULL_REF:
+        return _load_ws1_real_pull(config)
+
     path = root / f"{_safe_ref(pull_ref)}.json"
     try:
         raw = path.read_bytes()
@@ -162,8 +184,30 @@ def _shaped_pull(root: Path, pull_ref: str, config: Config) -> ShapedPull:
         ref=pull_ref,
         as_of=document.fetched_at,
         digest=sha256(raw).hexdigest(),
-        comps=_shape(document, config),
+        comps=document.comps,
     )
+
+
+def _load_ws1_real_pull(config: Config) -> ShapedPull:
+    """WS-1's real pull (contract item 3): the two committed T-S3 gate raw
+    fixtures, routed through the real record-shaping chain.
+
+    Raises `PullNotFoundError` if the fixtures are missing (same failure
+    contract as every other ref) rather than a raw `FileNotFoundError`.
+    """
+    try:
+        active_raw = _WS1_ACTIVE_FIXTURE.read_bytes()
+        inactive_raw = _WS1_INACTIVE_FIXTURE.read_bytes()
+    except (FileNotFoundError, NotADirectoryError, IsADirectoryError) as exc:
+        raise PullNotFoundError(
+            f"no pull found for ref {WS1_REAL_PULL_REF!r} (live-samples fixtures missing)"
+        ) from exc
+
+    active = json.loads(active_raw)
+    inactive = json.loads(inactive_raw)
+    comps = shape_raw_pull(active, inactive, config, _WS1_AS_OF, *_WS1_WINDOW)
+    digest = sha256(active_raw + inactive_raw).hexdigest()
+    return ShapedPull(ref=WS1_REAL_PULL_REF, as_of=_WS1_AS_OF, digest=digest, comps=comps)
 
 
 #: The memo's controls, exposed on the public entry point so callers never
@@ -171,17 +215,6 @@ def _shaped_pull(root: Path, pull_ref: str, config: Config) -> ShapedPull:
 #: sweep finds them wherever it looks).
 load_shaped_pull.cache_clear = _shaped_pull.cache_clear
 load_shaped_pull.cache_info = _shaped_pull.cache_info
-
-
-def _shape(document: _PullDocument, config: Config) -> tuple[StitchedComp, ...]:
-    """_STUB_RECORD_SHAPING — F4-S3 replaces the body, not the signature.
-
-    `config` is unused today and is in the signature on purpose: the real
-    shaping chain is knob-driven (`stitch_gap_days`, `provisional_lease_days`,
-    `withdrawal_suspect_months`), which is exactly why `Config` is part of this
-    module's memo key.
-    """
-    return document.comps
 
 
 #: Everything a legal ref may contain. F3-S1's cache keys are hex digests and

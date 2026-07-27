@@ -29,7 +29,7 @@ import pytest
 from rentcomp.models.domain import PriceCut, StitchedComp
 from rentcomp.models.requests import DeriveRequest, Filters, Subject
 from rentcomp.models.responses import Band
-from rentcomp.pipeline.anchor import PLACEHOLDER_ANCHOR_PSF, anchor
+from rentcomp.pipeline.anchor import anchor
 from rentcomp.pipeline.buckets import BUCKET_IDS, bucket_of, bucket_stats, premium_bounds
 from rentcomp.pipeline.cohorts import cohort_medians, median_by_year
 from rentcomp.pipeline.derive import (
@@ -340,7 +340,7 @@ def test_bucket_dollar_boundaries_track_the_anchor_band() -> None:
     arrive as a band because the anchor is a band. This is the arithmetic the
     view is forbidden to do (D5)."""
     anchor_value = anchor(
-        ["a"], [2.0], [2026], [1.0], [True], drift_band(7.0, DRIFT_SENSITIVITY_PTS), 1000.0
+        ["a"], [2.0], [2026], [1.0], [True], drift_band(7.0, DRIFT_SENSITIVITY_PTS), 1000.0, 2026
     )
     assert anchor_value is not None
     stats = bucket_stats([], [], [], [], [], anchor_value, 4.0)
@@ -377,9 +377,9 @@ def test_seam_the_anchor_is_none_when_no_selected_comp_has_a_psf() -> None:
     """The evidence gate is real in F0-S2 and must survive F8-S1: "no
     evidence" is a state, not a zero."""
     drift = drift_band(7.0, DRIFT_SENSITIVITY_PTS)
-    assert anchor(["a"], [None], [2026], [1.0], [True], drift, 1000.0) is None
-    assert anchor(["a"], [2.0], [2026], [0.0], [True], drift, 1000.0) is None
-    assert anchor(["a"], [2.0], [2026], [1.0], [False], drift, 1000.0) is None
+    assert anchor(["a"], [None], [2026], [1.0], [True], drift, 1000.0, 2026) is None
+    assert anchor(["a"], [2.0], [2026], [0.0], [True], drift, 1000.0, 2026) is None
+    assert anchor(["a"], [2.0], [2026], [1.0], [False], drift, 1000.0, 2026) is None
 
 
 def test_seam_the_anchor_cites_only_comps_that_could_have_produced_it() -> None:
@@ -392,6 +392,7 @@ def test_seam_the_anchor_cites_only_comps_that_could_have_produced_it() -> None:
         [True, True, True, False],
         drift,
         1000.0,
+        2026,
     )
     assert value is not None
     assert value.comp_keys == ["a"], (
@@ -402,7 +403,7 @@ def test_seam_the_anchor_cites_only_comps_that_could_have_produced_it() -> None:
 
 
 def test_seam_the_anchor_echoes_the_drift_it_was_asked_for() -> None:
-    value = anchor(["a"], [2.0], [2026], [1.0], [True], drift_band(7.0, 2.0), 1234.0)
+    value = anchor(["a"], [2.0], [2026], [1.0], [True], drift_band(7.0, 2.0), 1234.0, 2026)
     assert value is not None
     assert value.drift_pct == 7.0
     assert value.drift_sensitivity_pts == pytest.approx(2.0)
@@ -412,20 +413,9 @@ def test_seam_the_anchor_echoes_the_drift_it_was_asked_for() -> None:
     )
 
 
-def test_the_placeholder_anchor_is_conspicuous_rather_than_plausible() -> None:
-    """F0-S2 stub, and the assertion that keeps it honest: $1.00/sqft is not a
-    number this market produces, and a degenerate band is visibly not yet a
-    sensitivity band. F8-S1 deletes this test along with the placeholder."""
-    assert PLACEHOLDER_ANCHOR_PSF == 1.0
-    value = anchor(["a"], [2.0], [2026], [1.0], [True], drift_band(7.0, 2.0), 1000.0)
-    assert value is not None
-    assert value.psf.low == value.psf.mid == value.psf.high == 1.0
-    assert value.rent.mid == 1000.0
-
-
 def test_seam_the_price_test_needs_both_a_candidate_and_an_anchor() -> None:
     drift = drift_band(7.0, DRIFT_SENSITIVITY_PTS)
-    anchor_value = anchor(["a"], [2.0], [2026], [1.0], [True], drift, 1000.0)
+    anchor_value = anchor(["a"], [2.0], [2026], [1.0], [True], drift, 1000.0, 2026)
     args = ([make_comp()], ["a"], [0.0], [1.0], [True], 7, 4.0)
     assert price_test(None, anchor_value, *args) is None
     assert price_test(2100.0, None, *args) is None, (
@@ -438,7 +428,7 @@ def test_seam_the_candidate_premium_is_a_band_over_the_anchor_band() -> None:
     """Owner ruling: the guard trips if it trips at ANY edge, so the candidate
     premium must reach the decision as a band. Survives F11-S3 unchanged."""
     anchor_value = anchor(
-        ["a"], [2.0], [2026], [1.0], [True], drift_band(7.0, DRIFT_SENSITIVITY_PTS), 1000.0
+        ["a"], [2.0], [2026], [1.0], [True], drift_band(7.0, DRIFT_SENSITIVITY_PTS), 1000.0, 2026
     )
     assert anchor_value is not None
     band = candidate_premium_band(2100.0, anchor_value)
@@ -451,7 +441,7 @@ def test_seam_the_price_test_result_only_cites_comps_that_are_in_the_analysis() 
     comps = [make_comp("A"), make_comp("B", sqft=None)]
     anchor_value = anchor(
         ["a", "b"], [2.0, None], [2026, 2026], [1.0, 0.0], [True, False],
-        drift_band(7.0, DRIFT_SENSITIVITY_PTS), 1000.0,
+        drift_band(7.0, DRIFT_SENSITIVITY_PTS), 1000.0, 2026,
     )
     result = price_test(2100.0, anchor_value, comps, ["a", "b"], [0.0, None], [1.0, 0.0],
                         [True, False], 7, 4.0)
@@ -459,18 +449,19 @@ def test_seam_the_price_test_result_only_cites_comps_that_are_in_the_analysis() 
     assert {neighbor.key for neighbor in result.neighbors} <= {"a"}
 
 
-def test_seam_the_stub_price_test_guards_because_it_has_no_evidence() -> None:
-    """F0-S2 stub. The verdict is *true*, not fabricated: retrieval returns
-    nothing, so there are genuinely zero neighbours in range. F11-S3 replaces
-    the decision; this test goes with it."""
+def test_seam_the_price_test_guards_on_genuinely_thin_evidence() -> None:
+    """F11-S1 replaced the stub retrieval with the real one: a single-comp
+    pool now genuinely retrieves that one comp (real evidence, not an empty
+    stub result), and the guard still trips because one neighbour is still
+    fewer than F11-S3's usable-neighbour floor."""
     anchor_value = anchor(
-        ["a"], [2.0], [2026], [1.0], [True], drift_band(7.0, DRIFT_SENSITIVITY_PTS), 1000.0
+        ["a"], [2.0], [2026], [1.0], [True], drift_band(7.0, DRIFT_SENSITIVITY_PTS), 1000.0, 2026
     )
     result = price_test(2100.0, anchor_value, [make_comp()], ["a"], [0.0], [1.0], [True], 7, 4.0)
     assert result is not None
     assert result.state == "insufficient_evidence"
     assert result.reason == "too_few_in_range"
-    assert result.neighbors == []
+    assert {neighbor.key for neighbor in result.neighbors} == {"a"}
 
 
 # ---------------------------------------------------------------------------
@@ -538,9 +529,14 @@ def test_derive_partitions_the_pull_however_it_is_curated() -> None:
 
 
 def test_derive_reports_the_as_of_it_was_given_and_nothing_else() -> None:
-    """Owner ruling 1 at the orchestrator: `as_of` is data. Two contexts that
-    differ only in `as_of` differ only in `meta.as_of` — there is no clock down
-    here for anything else to have read."""
+    """Owner ruling 1 at the orchestrator: `as_of` is data, arriving through
+    exactly one argument, never the wall clock. Post-F8-S1, `as_of.year` is a
+    DECLARED input to the anchor's drift-compounding term (`currentYear`,
+    PM ruling) — so two contexts a calendar year apart are legitimately
+    expected to differ beyond `meta.as_of` (covered by
+    `test_ws1_anchor_drift.py`). What this test still protects: within the
+    SAME year, nothing else in the payload moves — proof there is no
+    OTHER, undeclared use of `as_of` (or the wall clock) anywhere below."""
     request = make_request()
     first = derive(request, make_context(PULL))
     later = derive(
@@ -548,14 +544,14 @@ def test_derive_reports_the_as_of_it_was_given_and_nothing_else() -> None:
         DeriveContext(
             config=Config(),
             comps=PULL,
-            as_of=date(2020, 1, 1),
+            as_of=date(AS_OF.year, 12, 31),
             pull_ref="unit-test",
             pull_digest="digest",
             config_digest="config-digest",
         ),
     )
     assert first.meta.as_of == AS_OF
-    assert later.meta.as_of == date(2020, 1, 1)
+    assert later.meta.as_of == date(AS_OF.year, 12, 31)
     assert first.model_dump(exclude={"meta"}) == later.model_dump(exclude={"meta"})
 
 

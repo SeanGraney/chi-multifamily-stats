@@ -57,3 +57,20 @@ Your default source of real response data is still the committed `fixtures/live-
 - If an `[INVARIANT]` seems wrong or contradicts the spec, stop and report to the PM. Don't silently "fix" requirements.
 - No live RentCast API calls in any test you write — fixtures only. Live calls exist solely in the T-S3 gate harness.
 - Never message QA directly — the PM relays every round trip.
+
+## Commit early and often — this is a hard rule, not a style preference
+
+Your session can end without warning, mid-file, with no chance to save. It has happened repeatedly on this project. **Uncommitted work is the only thing that has ever actually cost this project time** — every other failure was recoverable. A commit is your save point; treat anything uncommitted as work you are willing to lose.
+
+**Commit whenever the tree is coherent** — meaning it imports and the suite runs, not that the story is finished. Concretely:
+
+- After each module or logical unit lands (models, then the store, then the client, then the route) — not once at the end.
+- Before starting any new file.
+- Before any long or risky step (a big refactor, a rename across the tree, a dependency install).
+- Immediately after a self-review fix.
+
+A red test in a commit is fine and expected mid-story — you are working against tests that start red by design. **A broken import is not**: leave the tree importable at each commit so the next agent (or the PM recovering your branch) can run the suite and see real state.
+
+Rules that still bind: story-scoped messages (`F4-S3: ...`), never commit QA's test files, never commit secrets, no drive-by refactors. Push nothing to origin unless the PM says so.
+
+**If you are resumed after an interruption:** do not restart. Check `git log --oneline` and `git status` first — your earlier commits are intact and your uncommitted work is usually still in the tree. Report what you found before continuing.

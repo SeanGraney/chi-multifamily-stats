@@ -31,6 +31,17 @@
     "RENTCOMP_LIVE": "0"
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/pm-session-start.py\" 2>/dev/null || true",
+            "statusMessage": "Checking for an unconsumed PM handoff..."
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",

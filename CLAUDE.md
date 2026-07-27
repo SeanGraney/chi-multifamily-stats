@@ -18,6 +18,7 @@ structure, not yet built.
 - Git/QA/regression workflow: `rentcomp-pm/WORKFLOW.md`
 - Agent roles: `rentcomp-pm/AGENT_DEVELOPER.md`, `rentcomp-pm/AGENT_QA.md`
 - Live story queue: `rentcomp-pm/QUEUE.md`
+- **Session handoffs: `rentcomp-pm/handoffs/`** — a fresh PM consumes the newest `UNCONSUMED` file before reading the queue (boot ritual in `PROJECT_MANAGER.md`; a `SessionStart` hook also injects it automatically)
 
 Google Drive is a historical snapshot only — never a source of truth. Read docs from this repo.
 

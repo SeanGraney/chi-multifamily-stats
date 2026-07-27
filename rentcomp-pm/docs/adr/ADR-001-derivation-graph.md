@@ -118,7 +118,7 @@ class DerivedComp(BaseModel):
     cut_history: list[Cut]; relist_count: int; gap_days: int
     distance_mi: float
     weight: float                         # effective, after defaulting
-    contribution_pct: float | None        # weight / Σ selected weights — server-side (F5-S2)
+    contribution_share: float | None        # weight / Σ selected weights — server-side (F5-S2)
     state: Literal["included", "excluded", "filtered"]
     bucket: Literal["below", "at", "above"] | None
 

@@ -1,0 +1,28 @@
+{
+  "name": "rentcomp-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "RentComp SPA (Vite + React 18 + TypeScript + Tailwind, D6). Pure view layer — never computes a statistic (D5); renders whatever /api/derive returns.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "codegen": "openapi-typescript http://127.0.0.1:8000/openapi.json -o src/api/schema.d.ts"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "openapi-typescript": "^6.7.6",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.4.5",
+    "vite": "^5.4.21"
+  }
+}

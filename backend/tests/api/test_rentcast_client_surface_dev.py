@@ -118,6 +118,38 @@ def test_the_sink_never_sees_the_body_of_a_failed_call(live_client) -> None:
     assert ledger.history[-1].status == 401
 
 
+def test_the_sink_never_sees_a_redirect_body_either(live_client) -> None:
+    """The same ruling, at the boundary that a `>= 400` guard silently misses.
+
+    `httpx` does not follow redirects by default, so a 3xx arrives as an
+    ordinary response object, not an exception — a guard written as "4xx and up
+    is the failure case" hands the redirect page straight to the sink, and only
+    the JSON parse further down objects. By then the harm is done: F3-S4 would
+    find `cache/<key>/raw/<sig>.json` on disk, conclude that query was
+    satisfied, and close the gap on `<html>moved</html>`. The sink fires on 2xx
+    ONLY; everything else is a failure the ledger records and the cache doesn't.
+    """
+    sunk: list[bytes] = []
+    client, sent = live_client(
+        lambda request: httpx.Response(
+            302, headers={"Location": "https://elsewhere.example/"}, content=b"<html>moved</html>"
+        ),
+        sink=lambda params, raw, meta: sunk.append(raw),
+    )
+    with pytest.raises(UpstreamError) as caught:
+        client.fetch_listings(dict(QUERY))
+
+    assert sunk == [], "a redirect body was handed to the cache-writing seam"
+    assert "302" in str(caught.value), (
+        "the redirect was reported as whatever it failed to parse as, not as the "
+        "non-2xx status it actually was"
+    )
+    assert len(sent) == 1, "the redirect must not be followed — that spends a second call"
+    ledger = load_ledger()
+    assert ledger.calls_this_month == 1
+    assert ledger.history[-1].status == 302
+
+
 def test_the_sink_is_told_which_call_it_is_looking_at(live_client) -> None:
     """F3-S4 names one file per call (`y2025-inactive-off000.json`) and has to
     know the offset and the signature to do it, plus the total count to write a

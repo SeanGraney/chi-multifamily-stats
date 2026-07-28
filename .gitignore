@@ -36,3 +36,9 @@ blob-report/
 
 # claude code local settings
 .claude/settings.local.json
+
+# agent worktrees (isolation: "worktree" dispatches) — scratch, never committed
+.claude/worktrees/
+
+# looks like a local secrets file (D16 hygiene)
+.githooks/http-client.private.env.json

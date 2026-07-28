@@ -258,6 +258,28 @@ def test_a_trailing_space_in_a_window_is_not_an_error(search, seeded) -> None:
     assert search(window_start=" 01-01", window_end="12-31 ").status_code == 200
 
 
+def test_a_corrupt_cache_entry_is_surfaced_rather_than_re_bought(
+    search, seeded, rentcomp_home
+) -> None:
+    """An entry that exists but cannot be read is not an empty cache.
+
+    Treating it as a miss would re-pull — spending real calls to work around a
+    corrupt file, which is the one thing D24 exists to prevent. The user is
+    told which entry to delete instead, and nothing goes to the source.
+    """
+    seeded()
+    ref = search().json()["pull_ref"]
+    (rentcomp_home / "cache" / ref / "manifest.json").write_text("{ not json", encoding="utf-8")
+
+    response = search()
+
+    assert response.status_code == 500
+    assert ref in response.text, (
+        "the error does not name the cache entry, so the user cannot act on it"
+    )
+    assert load_ledger().calls_this_month == 0
+
+
 def test_an_unknown_field_is_rejected_rather_than_ignored(search, seeded) -> None:
     """`extra="forbid"`, for the same reason `DeriveRequest` has it: a typo'd
     field here silently widens or narrows a pull that costs real money."""

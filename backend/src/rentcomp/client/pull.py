@@ -235,12 +235,21 @@ def run_pull(
     )
     window = (window_start_mmdd, window_end_mmdd)
 
-    known = {} if force_refresh else _known_queries(key)
+    recorded = _known_queries(key)
+    known = {} if force_refresh or recorded is None else dict(recorded)
     owed = [query for query in fetchable if not _is_satisfied(known.get(_sig(query)))]
 
     if not owed:
-        # Nothing to buy and nothing to write: report what is already on disk
-        # rather than restamping a manifest with a fetch that did not happen.
+        if recorded is None:
+            # A plan with NOTHING fetchable — every window lies in the future
+            # (F4-S1 AC4) — still gets an entry, so the search is represented
+            # as "planned, cost nothing, found nothing" rather than as a pull
+            # that does not exist. The alternative reads downstream as a
+            # missing cache entry, which is a different fact.
+            _write_manifest(key, today, window, plan, fetchable, known)
+        # Otherwise nothing to buy and nothing to write: report what is already
+        # on disk rather than restamping a manifest with a fetch that did not
+        # happen.
         return _outcome_from(key, planned=len(plan), fetchable=len(fetchable), calls_spent=0)
 
     mode = resolve_mode()
@@ -398,15 +407,20 @@ def _require_budget(required: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _known_queries(key: str) -> dict[str, QueryStatus]:
-    """What the manifest already remembers about this pull's queries."""
+def _known_queries(key: str) -> dict[str, QueryStatus] | None:
+    """What the manifest already remembers about this pull's queries.
+
+    `None` distinguishes "no entry at all" from "an entry that records
+    nothing" — the two differ for a plan with no fetchable window, where the
+    first still needs a manifest written and the second already has one.
+    """
     try:
         manifest = read_manifest(key)
     except (LookupError, OSError, ValueError):
         # No entry yet, or one this version cannot read: either way nothing is
         # known to be satisfied, which is the safe direction (re-fetching is
         # recoverable; skipping a window silently is not).
-        return {}
+        return None
     return {query.sig: query for query in manifest.queries}
 
 

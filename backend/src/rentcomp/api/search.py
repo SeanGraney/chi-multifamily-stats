@@ -74,6 +74,20 @@ def post_search(request: SearchRequest) -> SearchResult:
         prior: PullOutcome | None = pull_status(ref)
     except CacheMissError:
         prior = None
+    except (OSError, ValueError, KeyError) as exc:
+        # An entry that exists but cannot be read is NOT the same as no entry.
+        # Treating it as a miss would re-pull — spending real calls to work
+        # around a corrupt file — so it is surfaced instead, naming the entry
+        # so the user can delete it (spec §7; F0-S5's ConfigError precedent in
+        # `api/derive.py`).
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"the cache entry for this search ({ref}) exists but could not be read: "
+                f"{exc}. Nothing was fetched. Delete <RENTCOMP_HOME>/cache/{ref} to start "
+                "that search over."
+            ),
+        ) from exc
 
     cache_status = "miss" if prior is None else ("hit" if prior.complete else "stale")
 

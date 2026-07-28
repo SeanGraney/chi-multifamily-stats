@@ -338,6 +338,42 @@ def test_the_ref_ignores_the_clock_but_not_the_search(fixture_mode) -> None:
         )
 
 
+def test_a_plan_with_nothing_fetchable_costs_nothing_and_still_exists(
+    fixture_mode,
+) -> None:
+    """The degenerate plan: every window lies in the future (F4-S1 AC4).
+
+    Reachable straight from the F2 form — a New-Year-spanning window with
+    `years_back=1`, any time before the window opens. It must cost zero calls
+    (nothing can have been listed in the future) and must still be a pull the
+    rest of the system can talk about: "planned, cost nothing, found nothing"
+    and "no such search" are different facts, and only one of them is true.
+    """
+    future_only = {
+        **SEARCH,
+        "years_back": 1,
+        "window_start_mmdd": "12-15",
+        "window_end_mmdd": "01-15",
+    }
+    plan = plan_pull_queries(date(2027, 6, 1), **future_only)
+    assert len(plan) == 2 and fetchable_queries(plan) == [], (
+        "the fixture search no longer produces a wholly-unfetchable plan — fix the fixture, "
+        "not the assertion"
+    )
+
+    outcome = run_pull(**future_only, today=date(2027, 6, 1))
+
+    assert outcome.calls_spent == 0
+    assert outcome.planned == 2 and outcome.fetchable == 0
+    assert outcome.missing == (), (
+        "a window that is planned-and-never-sent is not a gap in the evidence — reporting "
+        "it as missing would show a permanent 'incomplete' warning for records that cannot "
+        "exist"
+    )
+    assert outcome.complete is True
+    assert read_manifest(outcome.pull_ref).planned == 2
+
+
 def test_a_retyped_address_still_finds_the_evidence_already_paid_for(
     fixture_mode,
 ) -> None:

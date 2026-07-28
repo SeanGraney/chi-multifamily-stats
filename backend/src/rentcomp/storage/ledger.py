@@ -25,8 +25,27 @@ field, and its migration rule is the whole point:
   fail-closed direction — while the in-memory ledger restamps itself to the
   current month so the next save gets back on a normal cycle.
 
-`load_ledger()` never writes. Reading is not a mutation, and a keyless
-fixture-mode run must be able to import this module without creating anything.
+`load_ledger()` does not write **except for one deliberate exception (F3-S1)**:
+the very first read of a machine that has never run this product before seeds
+itself from the T-S3 gate's already-spent calls (see `_seed_from_gate` below)
+and persists that seed immediately, so the seed applies exactly once per
+install rather than being silently recomputed (and potentially reapplied) on
+every read. Every other read path is a pure read, same as before.
+
+WHY THE SEED EXISTS AND WHY IT LIVES HERE (F3-S1 dispatch item 1, PM ruling)
+-----------------------------------------------------------------------------
+The gate (`scripts/gate.py` / T-S3) has already spent real calls against the
+real 50/month cap before this product ever ships one line of cache code, and
+those calls are committed at `fixtures/live-samples/ledger.json`. Without a
+seed, a brand-new `RENTCOMP_HOME` reads `calls_this_month == 0` and the
+code-enforced cap would hand back calls that were already paid for. The PM's
+ruling is to seed **lazily, on load** rather than via a one-time migration
+step: idempotent by construction (a fresh machine gets seeded the first time
+its ledger is read, full stop — there's no separate step to forget), and it
+sits naturally next to F3-S1's other "make the cache real" work rather than
+in F0-S4 (which built the *mechanism* this seed reuses — the month-rollover
+rule already treats an absent month as "this month, count preserved", which
+is exactly what lets the gate's un-stamped 8 calls seed correctly here).
 
 The history entries hold params and outcomes and **never a credential** — this
 is exactly the sort of file that gets pasted into a report.
@@ -62,6 +81,14 @@ LEDGER_FILENAME = "ledger.json"
 
 #: `YYYY-MM`. Zero-padded, so plain string ordering is chronological ordering.
 _MONTH_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+#: The T-S3 gate's committed ledger — the same fixture `storage/pulls.py`
+#: resolves `fixtures/live-samples/` relative to this file, so it is found
+#: regardless of `RENTCOMP_HOME`. F3-S1's lazy seed reads this exactly once
+#: per fresh install (see `_seed_from_gate`).
+_GATE_LEDGER_PATH = (
+    Path(__file__).resolve().parents[4] / "fixtures" / "live-samples" / "ledger.json"
+)
 
 
 class LedgerError(Exception):
@@ -151,11 +178,13 @@ def ledger_path() -> Path:
 
 
 def load_ledger() -> Ledger:
-    """Read the ledger, applying the month rule. Never writes anything.
+    """Read the ledger, applying the month rule.
 
-    A missing file is a fresh month at zero — the normal state of a new
-    install. A file that is present but unreadable/unparseable raises
-    `LedgerError`; see the module docstring for why that is not a silent zero.
+    A missing file means a brand-new install: seeded from the gate's spend
+    (F3-S1, `_seed_from_gate`) rather than a bare fresh month at zero — see
+    the module docstring. A file that is present but unreadable/unparseable
+    raises `LedgerError`; see the module docstring for why that is not a
+    silent zero.
     """
     path = ledger_path()
     month_now = current_month()
@@ -163,7 +192,7 @@ def load_ledger() -> Ledger:
     try:
         raw = path.read_text(encoding="utf-8")
     except (FileNotFoundError, NotADirectoryError, IsADirectoryError):
-        return Ledger(month=month_now, calls_this_month=0)
+        return _seed_from_gate(month_now)
     except (OSError, UnicodeDecodeError) as exc:
         raise LedgerError(f"cannot read the call ledger {path}: {exc}") from exc
 
@@ -176,10 +205,17 @@ def load_ledger() -> Ledger:
             f"the call ledger {path} must be a JSON object, got {type(payload).__name__}"
         )
 
+    return _ledger_from_payload(payload, month_now, source=path)
+
+
+def _ledger_from_payload(payload: dict, month_now: str, *, source: Path) -> Ledger:
+    """The month-rollover rule (module docstring), factored out so
+    `_seed_from_gate` can apply the exact same rule to the gate's fixture
+    payload instead of duplicating it."""
     spent = payload.get("calls_this_month", 0)
     if isinstance(spent, bool) or not isinstance(spent, int) or spent < 0:
         raise LedgerError(
-            f"the call ledger {path} has a non-numeric 'calls_this_month' ({spent!r}). "
+            f"the call ledger {source} has a non-numeric 'calls_this_month' ({spent!r}). "
             "Fix it by hand — guessing here would either hand back calls that were paid "
             "for or block calls that were not."
         )
@@ -205,6 +241,38 @@ def load_ledger() -> Ledger:
         calls_this_month=spent,
         history=_history(payload.get("history")),
     )
+
+
+def _seed_from_gate(month_now: str) -> Ledger:
+    """F3-S1 dispatch item 1: the lazy seed for a machine that has never run
+    before. Applies the SAME month rule as a normal read (`_ledger_from_payload`)
+    to the gate's committed ledger, then persists the result immediately so a
+    second read finds a real `ledger.json` and this function never runs again
+    for this install — that is what makes "seed lazily on load" idempotent
+    rather than merely deterministic (PM ruling, F3-S1 dispatch).
+
+    If the gate fixture itself is unreadable (a stripped-down deployment with
+    no `fixtures/` tree, say), falls back to the pre-F3-S1 behaviour — a
+    fresh month at zero — rather than raising: a missing optional fixture
+    must never block the product from starting.
+    """
+    try:
+        raw = _GATE_LEDGER_PATH.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return Ledger(month=month_now, calls_this_month=0)
+    if not isinstance(payload, dict):
+        return Ledger(month=month_now, calls_this_month=0)
+
+    seeded = _ledger_from_payload(payload, month_now, source=_GATE_LEDGER_PATH)
+    try:
+        save_ledger(seeded)
+    except OSError:
+        # Best-effort persistence: this call still returns a correctly-seeded
+        # ledger even if the write failed (e.g. a read-only home); the next
+        # call simply seeds again rather than serving a stale zero.
+        pass
+    return seeded
 
 
 def save_ledger(ledger: Ledger) -> Path:

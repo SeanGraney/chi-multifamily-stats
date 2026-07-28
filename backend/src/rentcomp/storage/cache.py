@@ -42,7 +42,8 @@ ON-DISK LAYOUT (this story's own [DEFAULT] — round-trip behaviour is what's
 pinned, not the layout; ARCHITECTURE.md §5 sketches the same shape)
 -----------------------------------------------------------------------------
     <RENTCOMP_HOME>/cache/<key>/
-        manifest.json          # {"as_of": "...", "window": ["01-01","12-31"]}
+        manifest.json          # as_of + window (F3-S1), plus §5a's record of
+                               # which planned queries are satisfied (F4-S9)
         raw/<sig>.json          # immutable raw response bytes, one per call
         raw/<sig>.meta.json      # the caller's `meta` for that call, informational
 
@@ -55,7 +56,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from hashlib import sha256
@@ -66,6 +67,7 @@ from rentcomp.storage import rentcomp_home
 __all__ = [
     "CacheMissError",
     "Manifest",
+    "QueryStatus",
     "cache_key",
     "raw_response_paths",
     "read_manifest",
@@ -85,11 +87,70 @@ class CacheMissError(LookupError):
 
 
 @dataclass(frozen=True)
+class QueryStatus:
+    """One planned query's fate, as the manifest remembers it (F4-S9).
+
+    `label` is the user-facing name of the window ("2025 Inactive") — the
+    string F4-S6 renders when it says what is missing, stored rather than
+    recomputed so that reading a gap back off disk never needs the plan (and
+    therefore never needs the clock) that produced it.
+    """
+
+    label: str
+    sig: str
+    satisfied: bool
+    error: str | None = None
+
+    def as_json(self) -> dict:
+        return {
+            "label": self.label,
+            "sig": self.sig,
+            "satisfied": self.satisfied,
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
 class Manifest:
-    """The only place `as_of` and the search window live for a cache key."""
+    """The only place `as_of` and the search window live for a cache key.
+
+    ARCHITECTURE.md §5a also makes this the pull's manifest proper: "planned
+    queries, which are satisfied, which failed and why". F3-S1 wrote the first
+    half (`as_of`/`window`); F4-S9 adds the second, because a gap that lives
+    only in an in-memory `PullOutcome` is gone the moment the process ends and
+    a user who reopens the workspace tomorrow must still be told what is
+    absent — without paying a call to find out.
+
+    `queries` covers the FETCHABLE queries only. A structurally-empty window
+    (F4-S1 AC4) is planned and deliberately never sent, so it is not a gap:
+    counting it here would show the user a permanent "incomplete" warning for
+    evidence that cannot exist.
+    """
 
     as_of: date
     window: tuple[str, str]
+    #: Total queries the plan emitted, including structurally-empty ones.
+    planned: int = 0
+    #: The subset worth spending a call on (`planner.fetchable_queries`).
+    fetchable: int = 0
+    queries: tuple[QueryStatus, ...] = ()
+
+    @property
+    def missing(self) -> tuple[str, ...]:
+        """Labels of the windows that never arrived. Empty when whole."""
+        return tuple(q.label for q in self.queries if not q.satisfied)
+
+    @property
+    def calls_to_complete(self) -> int:
+        """One call per missing window — the F2-S3 unit, so the number shown
+        and the number spent cannot drift."""
+        return len(self.missing)
+
+    @property
+    def complete(self) -> bool:
+        """A manifest with no query records describes a pull that is whole by
+        construction (every F3-S1-era entry, and every synthetic fixture)."""
+        return not self.missing
 
 
 #: A cache key (and any per-call `sig`) must never itself need sanitizing
@@ -175,12 +236,31 @@ def write_raw_response(key: str, sig: str, raw: bytes, *, meta: Mapping) -> Path
     return raw_path
 
 
-def write_manifest(key: str, *, as_of: date, window: tuple[str, str]) -> Path:
-    """The ONLY place `as_of`/window live for `key` (PM-relayed AC 3)."""
+def write_manifest(
+    key: str,
+    *,
+    as_of: date,
+    window: tuple[str, str],
+    planned: int = 0,
+    fetchable: int = 0,
+    queries: Iterable[QueryStatus] = (),
+) -> Path:
+    """The ONLY place `as_of`/window live for `key` (PM-relayed AC 3), and
+    §5a's record of which planned queries are satisfied (F4-S9).
+
+    `planned`/`fetchable`/`queries` default to "nothing recorded", so a caller
+    that only owns the F3-S1 half writes exactly the file it always did.
+    """
     entry = _entry_dir(key)
-    payload = {"as_of": as_of.isoformat(), "window": list(window)}
+    payload = {
+        "as_of": as_of.isoformat(),
+        "window": list(window),
+        "planned": planned,
+        "fetchable": fetchable,
+        "queries": [q.as_json() for q in queries],
+    }
     path = entry / "manifest.json"
-    body = (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
+    body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     _atomic_write_bytes(path, body)
     return path
 
@@ -203,6 +283,18 @@ def read_manifest(key: str) -> Manifest:
     return Manifest(
         as_of=date.fromisoformat(payload["as_of"]),
         window=tuple(payload["window"]),
+        planned=int(payload.get("planned") or 0),
+        fetchable=int(payload.get("fetchable") or 0),
+        queries=tuple(_query_status(entry) for entry in payload.get("queries") or ()),
+    )
+
+
+def _query_status(payload: Mapping) -> QueryStatus:
+    return QueryStatus(
+        label=str(payload.get("label") or ""),
+        sig=str(payload.get("sig") or ""),
+        satisfied=bool(payload.get("satisfied")),
+        error=payload.get("error") if isinstance(payload.get("error"), str) else None,
     )
 
 

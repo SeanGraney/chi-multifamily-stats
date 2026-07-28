@@ -55,6 +55,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from rentcomp.models.domain import StitchedComp
 from rentcomp.pipeline.shape import shape_raw_pull
+from rentcomp.storage.cache import CacheMissError, raw_response_paths, read_manifest
 from rentcomp.storage.config import Config
 
 __all__ = [
@@ -166,10 +167,26 @@ def load_shaped_pull(pull_ref: str, config: Config) -> ShapedPull:
 
 @lru_cache(maxsize=4)
 def _shaped_pull(root: Path, pull_ref: str, config: Config) -> ShapedPull:
-    if pull_ref == WS1_REAL_PULL_REF:
+    # F3-S1 ordering gotcha (PM-relayed): the sanitizer runs FIRST, before any
+    # special-case branch does a lookup. The WS-1 branch below used to run
+    # ahead of `_safe_ref` because "ws1-real" is a fixed constant that can
+    # never be a traversal string — that was safe only because it never
+    # varied. Real cache keys are attacker-influenced input (a `pull_ref`
+    # arrives from a request body), so the F3-S1 branch below must never be
+    # reachable with an unsanitized ref, and neither must WS-1's now that
+    # they share this function.
+    safe_ref = _safe_ref(pull_ref)
+
+    if safe_ref == WS1_REAL_PULL_REF:
         return _load_ws1_real_pull(config)
 
-    path = root / f"{_safe_ref(pull_ref)}.json"
+    if _looks_like_cache_key(safe_ref):
+        try:
+            return _load_cache_backed_pull(safe_ref, config)
+        except CacheMissError as exc:
+            raise PullNotFoundError(f"no pull found for ref {pull_ref!r}") from exc
+
+    path = root / f"{safe_ref}.json"
     try:
         raw = path.read_bytes()
     except (FileNotFoundError, NotADirectoryError, IsADirectoryError) as exc:
@@ -208,6 +225,57 @@ def _load_ws1_real_pull(config: Config) -> ShapedPull:
     comps = shape_raw_pull(active, inactive, config, _WS1_AS_OF, *_WS1_WINDOW)
     digest = sha256(active_raw + inactive_raw).hexdigest()
     return ShapedPull(ref=WS1_REAL_PULL_REF, as_of=_WS1_AS_OF, digest=digest, comps=comps)
+
+
+#: `rentcomp.storage.cache.cache_key` only ever emits lowercase sha256 hex
+#: digests (64 chars). A synthetic-pulls ref is a hyphenated word
+#: (`"ws1-real"`, fixture filenames like `"synthetic-basic"`) and never
+#: happens to be 64 hex characters, so this is a safe, cheap way to tell
+#: "this ref is a real F3-S1 cache key" from "this ref is a synthetic-pulls
+#: filename" without probing the filesystem twice. Deliberately not pinned
+#: by QA's contract (its own docstring: "I do not pin *how* the loader
+#: tells... only the resulting behaviour") — free to change later.
+_CACHE_KEY_ALPHABET = frozenset("0123456789abcdef")
+
+
+def _looks_like_cache_key(ref: str) -> bool:
+    return len(ref) == 64 and _CACHE_KEY_ALPHABET.issuperset(ref)
+
+
+def _load_cache_backed_pull(key: str, config: Config) -> ShapedPull:
+    """F3-S1 + F4-S3's real cache, generalizing `_load_ws1_real_pull`'s
+    shape: read whatever raw responses were filed under `key`
+    (`storage.cache.write_raw_response`), shape them through the same
+    `pipeline.shape.shape_raw_pull` chain, and return a `ShapedPull` whose
+    `as_of` comes from the cache manifest — never from the caller or the
+    wall clock (PM-relayed AC 3).
+
+    Raises `CacheMissError` (translated to `PullNotFoundError` by the
+    caller) if the manifest or every raw response is absent — a cache
+    entry with a manifest but no bytes yet is exactly as "not there yet" as
+    no entry at all.
+    """
+    manifest = read_manifest(key)  # raises CacheMissError if absent
+
+    paths = raw_response_paths(key)
+    if not paths:
+        raise CacheMissError(f"cache entry {key!r} has a manifest but no raw responses")
+
+    active: list[dict] = []
+    inactive: list[dict] = []
+    raw_blobs: list[bytes] = []
+    for path in paths:
+        blob = path.read_bytes()
+        raw_blobs.append(blob)
+        records = json.loads(blob) if blob else []
+        # "inactive" contains "active" as a substring, so it must be checked
+        # first — a sig like "y2025-inactive-off000" must not be misfiled.
+        bucket = inactive if "inactive" in path.stem else active
+        bucket.extend(records)
+
+    comps = shape_raw_pull(active, inactive, config, manifest.as_of, *manifest.window)
+    digest = sha256(b"".join(raw_blobs)).hexdigest()
+    return ShapedPull(ref=key, as_of=manifest.as_of, digest=digest, comps=comps)
 
 
 #: The memo's controls, exposed on the public entry point so callers never

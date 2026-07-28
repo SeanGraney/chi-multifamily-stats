@@ -379,6 +379,52 @@ def test_dedupe_does_not_depend_on_which_response_a_copy_arrived_in() -> None:
     )
 
 
+@needs_seam
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "KNOWN GAP, raised at QA verify and referred to the PM (F4-S2 review item M1). "
+        "`_completeness` orders on (removed is not None, removed, price) only, so two "
+        "observations of one spell that agree on removal and price but differ on any OTHER "
+        "field are resolved first-seen-wins — i.e. by arrival order. Not an AC violation and "
+        "unreachable on the committed pull, so it did not fail the story; pinned strict so it "
+        "converts to a green test the moment it is fixed, instead of being forgotten."
+    ),
+)
+def test_two_observations_of_one_spell_resolve_the_same_way_in_either_order() -> None:
+    """The full form of the invariant `_dedupe_by_id`'s own docstring claims —
+    "identical input shaped to [X] or [Y] purely by call order" was the defect
+    it set out to remove — and that `_completeness` states outright: "Value-
+    derived only — never a position in the input."
+
+    That claim holds for the two fields that decide `censored` and
+    `effective_dom`, which is the part NORTH_STAR actually protects. It does
+    not hold for the ride-along fields, and `sqft` is the one that matters:
+    it feeds F4-S5's `premium`, and a missing-sqft comp is *default-excluded*
+    from every median. So the field most likely to differ between two reports
+    of one unit is the one that decides whether the comp counts at all.
+
+    Reachable precisely because of this story: before F4-S2 these two listing
+    ids were separate comps and were never compared. Six real groups now take
+    this path."""
+    reported_without_sqft = _synthetic(
+        id_="obs-a", address="300 W Order St", unit="Unit 1", listed="2026-05-01", removed="2026-06-10"
+    )
+    reported_with_sqft = _synthetic(
+        id_="obs-b", address="300 W Order St", unit="Apt 1", listed="2026-05-01", removed="2026-06-10"
+    )
+    reported_without_sqft["squareFootage"] = None
+    reported_with_sqft["squareFootage"] = 1000
+
+    forward = extract_spells([reported_without_sqft, reported_with_sqft])
+    reversed_ = extract_spells([reported_with_sqft, reported_without_sqft])
+    assert forward == reversed_, (
+        "the surviving spell's sqft depends on which response the copy arrived in:\n"
+        f"  no-sqft first : {[s.sqft for s in forward]}\n"
+        f"  with-sqft first: {[s.sqft for s in reversed_]}"
+    )
+
+
 def test_real_records_dedupe_to_the_pull_they_came_from() -> None:
     """Guard, not a fix: the real pull has 539 distinct listing ids, so
     dedupe-on-id is a no-op on it (F4-S7 §4). This pins that a future

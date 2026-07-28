@@ -241,3 +241,46 @@ def test_the_real_pull_groups_into_exactly_the_known_merge_set() -> None:
         f"the real 539-record pull normalizes to {len(keys)} distinct address+unit groups; "
         "expected 533 (537 = today's under-merging key, see this test's docstring)"
     )
+
+
+# ---------------------------------------------------------------------------
+# 4431 S Sacramento Ave — the case QA deliberately did NOT decide
+# ---------------------------------------------------------------------------
+
+
+def test_the_sacramento_garden_unit_ambiguity_stays_unmerged_and_visible() -> None:
+    """Characterization, not a ruling — pinned at QA verify so the decision
+    stays a decision.
+
+    The committed pull has three listings at `4431 S Sacramento Ave`, all
+    listed **2026-03-02 at $1,400**, removed 2026-04-09 / 04-26 / 04-29:
+
+        `4431 S Sacramento Ave Unit Gdn`  (addressLine2 null, sqft 1000)
+        `4431 S Sacramento Ave Unit G`    (addressLine2 null, sqft 1012)
+        `4431 S Sacramento Ave` + `Unit 1`            (sqft 1012)
+
+    "Unit Gdn" and "Unit G" are both plausibly *the garden unit*, and two of
+    the three agree on sqft to the foot. This smells like one vacancy counted
+    up to three times — which would over-weight one landlord in the cohort
+    median. It is not provable from the data, so nothing here merges them.
+
+    WHY IT IS PINNED ANYWAY: this address is the concrete instance of the
+    `listed`-only spell-identity risk that
+    `test_f4s2_spell_extraction.py::test_no_two_listing_ids_in_one_group_report_the_same_spell_start`
+    guards abstractly. All three share the start date 2026-03-02, so a future
+    normalizer that ruled `Gdn` == `G` == `1` would not just merge groups — it
+    would hand `extract_spells` three observations of one start and **silently
+    drop two of the five spells**, keeping the latest removal (2026-04-29) and
+    the sqft of whichever copy arrived first. Merging here is therefore a
+    change that must be made deliberately, with that consequence understood,
+    never as a side effect of loosening the normalizer."""
+    keys = {
+        comp_key(record["addressLine1"], record.get("addressLine2"))
+        for record in _real_records()
+        if "4431 S Sacramento" in (record.get("addressLine1") or "")
+    }
+    assert len(keys) == 3, (
+        "the three 4431 S Sacramento Ave listings no longer key distinctly. If that was "
+        "deliberate, note that all three share the 2026-03-02 start date, so spell extraction "
+        f"now silently drops two spells — re-bless via the PM, do not adjust in place: {keys}"
+    )

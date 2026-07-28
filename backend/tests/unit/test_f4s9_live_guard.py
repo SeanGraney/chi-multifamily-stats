@@ -452,6 +452,36 @@ def test_injecting_a_transport_does_not_by_itself_enable_live_mode(
 
 
 @needs_orchestrator
+def test_a_spent_budget_does_not_block_a_fixture_mode_pull(
+    default_env, booby_trapped_httpx, no_network
+) -> None:
+    """AC5's boundary against AC4 — where the budget check must NOT be.
+
+    A fixture-mode pull spends nothing, so the monthly cap has no claim on it.
+    If the affordability check ran regardless of mode, the entire build would
+    stop working at the end of any month the owner used their calls in: every
+    Playwright spec, every dev server, every `pytest` run goes through this
+    path (WORKFLOW.md §6), and none of them cost a penny.
+
+    Pinned explicitly because the natural place to put the check — at the top
+    of `run_pull`, before the mode is resolved — is the wrong one, and nothing
+    would surface that until the ledger crossed the cap.
+    """
+    save_ledger(Ledger(month=current_month(), calls_this_month=999, history=()))
+    assert load_ledger().remaining == 0
+
+    outcome = run_pull(**SEARCH, today=TODAY, transport=None)
+
+    assert outcome.calls_spent == 0
+    assert outcome.complete is True, (
+        "a fixture-mode pull was refused (or truncated) because the month's LIVE call "
+        "budget is spent. Serving a saved response costs nothing; the cap governs the "
+        "wire, not the disk."
+    )
+    assert booby_trapped_httpx == [] and no_network == []
+
+
+@needs_orchestrator
 def test_live_mode_without_a_key_fails_loudly_and_spends_nothing(
     default_env, booby_trapped_httpx, monkeypatch, no_network
 ) -> None:

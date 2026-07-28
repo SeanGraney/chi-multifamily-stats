@@ -15,6 +15,7 @@ story/<id>-qa     e.g. story/F4-S3-qa   ← QA branch, cut from main directly
 - Once QA hands off (via the PM), the developer cuts `story/<id>` from `main` and implements.
 - QA then merges `story/<id>` into `story/<id>-qa` for every test run (§4 sync ritual) — this is how QA's branch acquires real code to test against, never mocks of it.
 - Neither branch is long-lived: both exist only for the story's lifecycle.
+- **Isolated-worktree dispatches (`isolation: "worktree"`) only have one shared `.venv/` — the one at the main checkout's repo root.** Its editable install (`pip install -e .`) resolves imports against the main checkout's `backend/src`, not the worktree's own copy. Prepend `PYTHONPATH=<this-worktree>/backend/src` to `pytest`/`python` invocations run inside a worktree, or the run silently tests the *wrong tree's* code. Found by the F2-S2 dev (2026-07-27).
 
 ## 3. The dev ↔ QA feedback loop
 

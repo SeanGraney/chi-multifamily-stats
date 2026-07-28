@@ -15,6 +15,19 @@ partially in the future (daysOldMin floor), year boundaries (Dec-Jan windows
 spanning year end), leap day. Planner output is a pure function of
 (params, today)."
 
+AC4, added by the PM at spot-check AFTER this file's first revision: a
+structurally-empty window (`daysOldMax < daysOldMin`, i.e. a cohort whose
+padded window has not opened yet) must be DETECTABLE, so that no API call is
+ever spent on it and F2-S3's "est. N API calls" never counts it -- without
+silently dropping the cohort from the plan's description. This file's original
+revision missed it: it observed the negative daysOldMax and excused it. The
+correction is asserted inline in
+`test_year_boundary_window_wraps_the_end_into_next_calendar_year`; the
+exhaustive coverage (the min==max boundary, the `fetchable_queries` filter,
+the still-described cohort, and the two converse property tests) lives in the
+developer's companion file `test_query_planner_dev.py`, which is the right
+home for it under AGENT_QA.md's "leave most of L1 to the developer".
+
 Spec formula (functional spec §3.2, lines 80-93), reproduced because this
 IS the invariant under test, not a paraphrase of it:
 
@@ -342,12 +355,30 @@ def test_year_boundary_window_wraps_the_end_into_next_calendar_year() -> None:
     # y=0 -> cohort year 2027: this instance of the window hasn't happened
     # yet as of today (Jun 2027 is before Dec 2027) -- still wraps the same
     # way, and daysOldMin still floors at 1 even though daysOldMax goes
-    # negative for this genuinely-not-yet-open window (an accurate, if
-    # degenerate, consequence of the literal formula -- not a bug).
+    # negative for this genuinely-not-yet-open window.
+    #
+    # CORRECTION (PM ruling at spot-check, AC4). An earlier revision of this
+    # test called that negative daysOldMax "an accurate, if degenerate,
+    # consequence of the literal formula -- not a bug", and asserted nothing
+    # about it. That was too generous. The arithmetic is right, but the
+    # RESULTING QUERY is not merely degenerate: `rentcast_range` does no
+    # min<=max validation, so `daysOld=1:-107` reaches the wire, and nothing
+    # can have been listed in the future -- the call returns zero BY
+    # CONSTRUCTION while still spending 1 of a 50/month cap and inflating
+    # F2-S3's user-facing "est. N API calls". So the plan must make this
+    # detectable; see AC4 below.
     newer = _find(queries, year=2027, status="Active")
     assert newer.window_start == date(2027, 12, 15)
     assert newer.window_end == date(2028, 1, 15)
     assert newer.days_old_min == 1
+    assert newer.days_old_max == -107
+    assert newer.is_structurally_empty is True, (
+        "a window that has not opened yet must be detectable as guaranteed-empty "
+        "so no API call is ever spent on it (AC4)"
+    )
+    # ...and the elapsed cohort in the same plan must NOT be flagged -- the
+    # marker must not creep onto a query that can return real records.
+    assert older.is_structurally_empty is False
 
 
 @needs_planner

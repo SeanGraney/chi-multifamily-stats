@@ -113,22 +113,17 @@ def _normalize_address(address: str | None) -> str:
 def _normalize_unit(unit: str | None) -> str:
     """The unit label with its designator stripped, or "" if there is none."""
     tokens = _tokens(unit)
-    if not tokens:
-        return ""
 
-    first = tokens[0]
-    if first in _UNIT_DESIGNATORS:
-        rest = tokens[1:]
-    elif first.startswith("#"):
-        rest = [first.lstrip("#"), *tokens[1:]]
-    else:
-        rest = tokens
+    label = tokens[1:] if tokens and tokens[0] in _UNIT_DESIGNATORS else list(tokens)
+    if label and label[0].startswith("#"):
+        # "#" is written both detached ("# 3") and attached ("#3", "Unit #3").
+        head = label[0].lstrip("#")
+        label = [head, *label[1:]] if head else label[1:]
 
     # A designator with nothing after it *is* the label (a listing whose
     # `addressLine2` is literally "Unit"); dropping it would key that comp as
-    # the whole building.
-    label = " ".join(token for token in rest if token)
-    return label or " ".join(tokens)
+    # the whole building, which `comp_key` keeps deliberately distinct.
+    return " ".join(label) or " ".join(tokens)
 
 
 def comp_key(address: str, unit: str | None) -> str:

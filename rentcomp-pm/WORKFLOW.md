@@ -4,6 +4,8 @@
 
 New dedicated git repository. `main` is protected by convention: nothing lands on main except via the merge protocol in §4. This `rentcomp-pm/` directory lives at repo root; `QUEUE.md` changes are committed by the PM directly to main (docs-only commits are exempt from the story protocol).
 
+**Push `main` to `origin` after every story DONE, and after any milestone/epic completion — owner-authorized standing rule (2026-07-27), no per-push confirmation needed.** `git push origin main` after the merge + branch cleanup that already happens at DONE (§4 step 3). If a push ever fails non-trivially (diverged origin, conflict) stop and flag it rather than force-pushing.
+
 ## 2. Branches — two per story
 
 ```

@@ -1,0 +1,6 @@
+# Pinned test-only dependencies, on top of requirements.txt.
+# NOT part of the runtime dependency budget (ARCHITECTURE.md §1a/D9) — these
+# never ship, they only run the suite. Install into the repo-root .venv:
+#   .venv/bin/pip install -r backend/requirements.txt -r backend/requirements-dev.txt -e backend/
+pytest==9.1.1
+hypothesis==6.161.5

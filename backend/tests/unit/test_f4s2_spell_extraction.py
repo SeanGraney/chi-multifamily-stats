@@ -45,11 +45,13 @@ pull, zero live calls — D17):
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
 import pytest
 
+from rentcomp.pipeline.keys import comp_key
 from rentcomp.storage.config import Config
 
 try:  # the seam this story is asked to add
@@ -394,4 +396,84 @@ def test_real_records_dedupe_to_the_pull_they_came_from() -> None:
     assert len(comps) >= 500, (
         f"the 539-record real pull shaped into only {len(comps)} comps — dedupe or grouping is "
         "swallowing records"
+    )
+
+
+# ---------------------------------------------------------------------------
+# the load-bearing preconditions of `listed`-only spell identity
+#
+# Added at QA VERIFY (not at plan time): the implementation identifies a spell
+# by its `listed` date alone, and resolves two observations of one start by
+# keeping the "more complete" one. That is sound ONLY while two *genuinely
+# different* vacancy episodes can never share a start date inside one group —
+# if they can, the loser is dropped with no exception, no log and no flag, and
+# `effective_dom`/`censored` change with zero signal.
+#
+# Two separate conditions underwrite it. Neither was committed as a test, and
+# they are not the same claim — the first is structural (cannot be violated by
+# any RentCast response), the second is merely empirical (true of this pull,
+# not guaranteed of the next). Pinning them here is what makes a future
+# violation loud instead of silent.
+# ---------------------------------------------------------------------------
+
+
+def test_a_history_events_dict_key_is_its_own_listed_date() -> None:
+    """PRECONDITION 1 — structural, and the reason "0 duplicate listed dates
+    within a record" is not evidence of anything risky.
+
+    RentCast keys the `history` object *by* the event's own `listedDate`
+    (580/580 events across the committed pull). JSON object keys are unique,
+    so two events inside one record's history **cannot** share a `listed` date
+    — it is impossible by the wire format, not lucky.
+
+    This test exists so that if RentCast ever re-keys `history` by something
+    else (removal date, an event id, a sequence number), the `listed`-only
+    identity rule stops being safe *here*, loudly, instead of silently
+    swallowing a spell inside `extract_spells`."""
+    mismatches = [
+        (record["id"], key, event.get("listedDate"))
+        for record in _real_records()
+        for key, event in (record.get("history") or {}).items()
+        if (event.get("listedDate") or "")[:10] != key
+    ]
+    assert not mismatches, (
+        "a `history` event is no longer keyed by its own listedDate, so two events in one "
+        "record can now collide on `listed` and `extract_spells` would silently drop one: "
+        f"{mismatches[:5]}"
+    )
+
+
+@needs_seam
+def test_no_two_listing_ids_in_one_group_report_the_same_spell_start() -> None:
+    """PRECONDITION 2 — empirical, and the one that actually carries risk.
+
+    Precondition 1 only covers events *within one record*. AC2 newly puts two
+    distinct listing ids into one group (six real groups do this), and nothing
+    structural stops two ids from reporting a spell with the same `listed`
+    date. When that happens `extract_spells` keeps one and drops the other in
+    silence.
+
+    Today that is 0 across all six real multi-record groups, so the merge is
+    lossless on this pull — which is exactly what makes it worth pinning: the
+    day a pull violates this, the number that moves is `effective_dom`, and
+    nothing else in the suite would notice."""
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for record in _real_records():
+        address = record.get("addressLine1") or record.get("formattedAddress") or ""
+        groups[comp_key(address, record.get("addressLine2"))].append(record)
+
+    lossy: dict[str, list] = {}
+    for key, records in groups.items():
+        if len(records) < 2:
+            continue
+        per_id = {record["id"]: {s.listed for s in extract_spells([record])} for record in records}
+        merged = len(extract_spells(records))
+        separate = len(set().union(*per_id.values()))
+        if merged != separate:
+            lossy[key] = sorted(per_id)
+
+    assert not lossy, (
+        "two listing ids in one normalized group report a spell with the same start date; "
+        "`extract_spells` dropped one of them with no exception, log or flag — if they were "
+        f"distinct vacancy episodes rather than duplicate reports, that is lost evidence: {lossy}"
     )

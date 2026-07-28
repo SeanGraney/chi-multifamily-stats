@@ -8,6 +8,14 @@ filter + cohort assignment. Internal structure below this seam is a
 functions, so this module keeps everything behind one composed call rather
 than inventing importable internals nobody pinned.
 
+``extract_spells``/``Spell`` are the one exception (F4-S2): ADR-002 note 6
+recorded that this module owed a Layer-1 seam, and F4-S2's AC is stated in
+*spell rows* ("a record whose history holds two prior spells yields three
+spell rows") — a claim ``shape_raw_pull`` cannot express, since it exposes
+only post-stitch comps. Asserting it through the stitcher would make an
+F4-S2 acceptance criterion depend on F4-S3's merge threshold. F4-S3's own
+``stitch`` seam is its story's to add, not this one's.
+
 INPUT SHAPE
 -----------
 ``active_records``/``inactive_records`` are the raw parsed JSON lists from
@@ -23,15 +31,13 @@ ALGORITHM (one pass, four stages, all inside this function/its helpers)
 -------------------------------------------------------------------------
 1. **Dedupe** on ``id`` across both lists (F4-S2) — a listing id repeated
    across the Active/Inactive pulls (a status flip mid-pagination) is one
-   record, not two.
+   listing, not two, and lands in exactly one group.
 2. **Group** the deduped records by normalized address+unit
    (`pipeline.keys.comp_key` — the same identity primitive the rest of the
    system uses, not a second normalization rule).
 3. **Spell extraction**: every group's record(s) contribute one spell per
    top-level (listedDate/removedDate/price) plus one spell per ``history``
-   entry. Spells that describe the exact same (listed, removed) pair
-   (a record's current top-level spell almost always duplicates its own
-   last ``history`` entry, in the real data) collapse to one.
+   entry, collapsed to one row per listing start (see ``extract_spells``).
 4. **Stitch** (F4-S3): spells within one group, sorted chronologically, merge
    into a chain whenever the next spell's ``listedDate`` is *less than*
    ``config.stitch_gap_days`` after the previous spell's ``removedDate``
@@ -61,7 +67,7 @@ from rentcomp.models.domain import PriceCut, StitchedComp
 from rentcomp.pipeline.keys import comp_key
 from rentcomp.storage.config import Config
 
-__all__ = ["shape_raw_pull"]
+__all__ = ["Spell", "extract_spells", "shape_raw_pull"]
 
 #: F4-S8 [INVARIANT]: the confirmed rung of the removal ladder — a fixed
 #: 42 days, from the story text, not a configurable knob (only
@@ -82,8 +88,15 @@ _DAYS_PER_MONTH = 30
 
 
 @dataclass(frozen=True, slots=True)
-class _Spell:
-    """One reported listing interval, before stitching."""
+class Spell:
+    """One reported listing interval, before stitching (F4-S2).
+
+    ``removed is None`` means the spell was still open when the pull was
+    taken — the censored case NORTH_STAR calls the single most important
+    distinction in the system. The fields past ``price`` are the record
+    attributes the spell was read from; they ride along so ``_build_comp``
+    can populate a `StitchedComp` without a second pass over the raw dicts.
+    """
 
     listed: date
     removed: date | None
@@ -110,17 +123,13 @@ def shape_raw_pull(
     Deterministic: groups are visited in sorted-key order, so two calls over
     the same inputs produce the same tuple in the same order.
     """
-    records = _dedupe_by_id(active_records, inactive_records)
-
     groups: dict[str, list[dict]] = defaultdict(list)
-    for record in records:
-        address = record.get("addressLine1") or record.get("formattedAddress") or ""
-        key = comp_key(address, record.get("addressLine2"))
-        groups[key].append(record)
+    for copies in _dedupe_by_id(active_records, inactive_records):
+        groups[_group_key(copies)].extend(copies)
 
     comps: list[StitchedComp] = []
     for key in sorted(groups):
-        spells = _extract_spells(groups[key])
+        spells = extract_spells(groups[key])
         if not spells:
             continue
         chains = _stitch(spells, config.stitch_gap_days)
@@ -133,13 +142,50 @@ def shape_raw_pull(
     return tuple(comps)
 
 
-def _dedupe_by_id(active: Sequence[dict], inactive: Sequence[dict]) -> list[dict]:
-    """F4-S2: dedupe on listing id, not positional order or list membership."""
-    seen: dict[object, dict] = {}
+def _dedupe_by_id(active: Sequence[dict], inactive: Sequence[dict]) -> list[list[dict]]:
+    """F4-S2 "dedupe on listing `id`" — every copy of one id, together.
+
+    A listing whose status flips between the Active call and the Inactive
+    call appears in *both* responses, and the two copies disagree: the Active
+    copy has no ``removedDate``, the Inactive copy does. Keeping whichever
+    copy arrived first (the previous behaviour) made the result depend on
+    pagination order — identical input shaped to ``censored=True, dom=87`` or
+    ``censored=False, removal_class='confirmed', dom=40`` purely by call
+    order.
+
+    Discarding the second copy instead is not an option either: a removal
+    observed anywhere in the pull *is* an observation, and censoring a comp
+    that actually leased biases every Kaplan-Meier curve toward pessimism
+    (NORTH_STAR: censored-vs-leased is "the single most important
+    distinction in the whole system").
+
+    So neither copy is thrown away here. Both are carried into one group, and
+    `extract_spells` resolves them at the spell level, where the disagreement
+    actually lives — which also keeps the case the two copies are *not* in
+    conflict (an Active copy re-listed after the Inactive copy's removal is a
+    genuine re-list) from silently losing its second spell.
+    """
+    by_id: dict[object, list[dict]] = defaultdict(list)
     for record in (*active, *inactive):
         rid = record.get("id")
-        seen.setdefault(rid if rid is not None else id(record), record)
-    return list(seen.values())
+        by_id[rid if rid is not None else id(record)].append(record)
+    return list(by_id.values())
+
+
+def _record_address(record: dict) -> str:
+    return record.get("addressLine1") or record.get("formattedAddress") or ""
+
+
+def _group_key(copies: Sequence[dict]) -> str:
+    """The single normalized address+unit that every copy of one listing id
+    shares (`pipeline.keys.comp_key`).
+
+    Chosen by value rather than by arrival order, so two copies that spell
+    their address differently still land in exactly one group — otherwise
+    "dedupe on id" would hold at the record level and break at the group
+    level.
+    """
+    return min(comp_key(_record_address(record), record.get("addressLine2")) for record in copies)
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -148,15 +194,43 @@ def _parse_date(value: str | None) -> date | None:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
 
 
-def _extract_spells(records: Sequence[dict]) -> list[_Spell]:
-    """F4-S2: one spell per top-level record, plus one per ``history`` entry.
+def extract_spells(records: Sequence[dict]) -> tuple[Spell, ...]:
+    """F4-S2 [INVARIANT] "what counts as a prior spell": one spell per
+    top-level record, plus one per ``history`` entry, in chronological order.
 
-    Deduplicated on ``(listed, removed)`` — a record's current top-level
-    spell almost always restates its own latest ``history`` entry.
+    A record whose ``history`` holds two prior spells therefore yields three
+    spell rows (AC1) — asserted here rather than through the stitcher, whose
+    42-day merge threshold is F4-S3's rule, not this story's.
+
+    IDENTITY: a spell is identified by **when the listing started**. Two
+    reports of a listing that started on the same day at the same unit are
+    two observations of one spell, not two vacancies, so they collapse to one
+    row. Three real shapes reach this rule:
+
+    * a record's top-level (listedDate, removedDate) restating its own newest
+      ``history`` event — 495 of the 495 real records that have a history;
+      counting both would fabricate a zero-length gap on every one of them;
+    * the same listing id seen Active in one response and removed in the
+      other (see `_dedupe_by_id`);
+    * two listing ids for one physical unit, which AC2's normalized grouping
+      key now puts in the same group.
+
+    When two observations of one spell disagree, the more complete one wins:
+    an observed ``removedDate`` beats "still active", and the later of two
+    observed removals beats the earlier ([DEFAULT] tie-break — it is the more
+    recent observation of the same listing). The winner is chosen from the
+    spells' own values, never from their input order, so shaping cannot
+    depend on which response a copy arrived in.
+
+    Note what is deliberately *not* collapsed: consecutive segments whose
+    ``removedDate`` equals the next segment's ``listedDate`` (a price change,
+    23 real records) are distinct starts and stay distinct rows. Merging
+    those is F4-S3's job, and doing it here would destroy the price cut
+    `cut_history` is built from.
     """
-    raw: list[_Spell] = []
+    raw: list[Spell] = []
     for record in records:
-        address = record.get("addressLine1") or record.get("formattedAddress") or ""
+        address = _record_address(record)
         unit = record.get("addressLine2")
         lat = float(record.get("latitude") or 0.0)
         lng = float(record.get("longitude") or 0.0)
@@ -164,11 +238,11 @@ def _extract_spells(records: Sequence[dict]) -> list[_Spell]:
         baths = float(record["bathrooms"]) if record.get("bathrooms") is not None else None
         sqft = float(record["squareFootage"]) if record.get("squareFootage") is not None else None
 
-        def _spell(listed_raw: str | None, removed_raw: str | None, price: object) -> _Spell | None:
+        def _spell(listed_raw: str | None, removed_raw: str | None, price: object) -> Spell | None:
             listed = _parse_date(listed_raw)
             if listed is None:
                 return None
-            return _Spell(
+            return Spell(
                 listed=listed,
                 removed=_parse_date(removed_raw),
                 price=float(price) if price is not None else 0.0,
@@ -190,21 +264,29 @@ def _extract_spells(records: Sequence[dict]) -> list[_Spell]:
             if entry is not None:
                 raw.append(entry)
 
-    seen: set[tuple[date, date | None]] = set()
-    deduped: list[_Spell] = []
-    for spell in sorted(raw, key=lambda s: (s.listed, s.removed or date.max)):
-        sig = (spell.listed, spell.removed)
-        if sig in seen:
-            continue
-        seen.add(sig)
-        deduped.append(spell)
-    return deduped
+    best: dict[date, Spell] = {}
+    for spell in raw:
+        incumbent = best.get(spell.listed)
+        if incumbent is None or _completeness(spell) > _completeness(incumbent):
+            best[spell.listed] = spell
+    return tuple(best[listed] for listed in sorted(best))
 
 
-def _stitch(spells: Sequence[_Spell], stitch_gap_days: int) -> list[list[_Spell]]:
+def _completeness(spell: Spell) -> tuple[bool, date, float]:
+    """Total order over two observations of the same listing start.
+
+    Value-derived only — never a position in the input — so `extract_spells`
+    returns the same rows whichever response a duplicated listing arrived in.
+    The trailing ``price`` is a deterministic tie-break with no semantic
+    claim behind it; the two components before it are the semantic ones.
+    """
+    return (spell.removed is not None, spell.removed or date.min, spell.price)
+
+
+def _stitch(spells: Sequence[Spell], stitch_gap_days: int) -> list[list[Spell]]:
     """F4-S3: merge chronologically adjacent spells whose gap is strictly
     less than ``stitch_gap_days``."""
-    chains: list[list[_Spell]] = [[spells[0]]]
+    chains: list[list[Spell]] = [[spells[0]]]
     for spell in spells[1:]:
         last = chains[-1][-1]
         if last.removed is not None and (spell.listed - last.removed).days < stitch_gap_days:
@@ -214,7 +296,7 @@ def _stitch(spells: Sequence[_Spell], stitch_gap_days: int) -> list[list[_Spell]
     return chains
 
 
-def _withdrawal_suspect_flags(chains: Sequence[Sequence[_Spell]], months: int) -> list[bool]:
+def _withdrawal_suspect_flags(chains: Sequence[Sequence[Spell]], months: int) -> list[bool]:
     """F4-S8: a completed chain flags suspect iff the group's NEXT chain
     starts 6 weeks-6 months after it ended."""
     flags = [False] * len(chains)
@@ -253,7 +335,7 @@ def _mmdd(value: str) -> tuple[int, int]:
     return (int(month), int(day))
 
 
-def _build_comp(chain: Sequence[_Spell], suspect: bool, as_of: date, config: Config) -> StitchedComp:
+def _build_comp(chain: Sequence[Spell], suspect: bool, as_of: date, config: Config) -> StitchedComp:
     first, last = chain[0], chain[-1]
     censored = last.removed is None
     end_date = last.removed if last.removed is not None else as_of

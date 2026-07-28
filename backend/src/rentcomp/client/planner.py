@@ -80,6 +80,7 @@ from datetime import date
 from rentcomp.client.query import build_listing_params, rentcast_range
 
 __all__ = [
+    "MIN_DAYS_OLD",
     "PAD_DAYS",
     "STATUSES",
     "PlannedQuery",
@@ -225,7 +226,10 @@ def _parse_mmdd(value: str, *, field: str) -> tuple[int, int]:
     asked to move.
     """
     parts = str(value).split("-")
-    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+    # `isascii()` as well as `isdigit()`: the latter alone accepts superscripts
+    # and other unicode digit forms that `int()` then refuses, which would raise
+    # from the wrong place with a message that does not name the field.
+    if len(parts) != 2 or not all(part.isdigit() and part.isascii() for part in parts):
         raise ValueError(f"{field} must be 'MM-DD', got {value!r}")
     month, day = int(parts[0]), int(parts[1])
     try:

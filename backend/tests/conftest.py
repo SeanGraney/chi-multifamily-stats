@@ -30,6 +30,7 @@ socket, so the switch is invisible to it.
 from __future__ import annotations
 
 import importlib
+import ipaddress
 import socket
 
 import pytest
@@ -88,6 +89,31 @@ class NetworkUseInTestsError(RuntimeError):
 network_attempts: list[str] = []
 
 
+def _is_loopback(address: object) -> bool:
+    """True for a host-local address, which by construction cannot reach RentCast.
+
+    The kill switch exists to stop *outbound* calls (WORKFLOW.md §6 — real
+    money), and no loopback packet leaves the machine. Letting these through
+    is not a hole in the guard; blocking them is a portability bug:
+
+    Windows has no `AF_UNIX` socketpair, so CPython's `socket.socketpair()`
+    falls back to a real 127.0.0.1 TCP connect — and asyncio's
+    `ProactorEventLoop` builds its self-pipe that way for *every* loop it
+    creates. Blocking loopback therefore kills `TestClient` itself before a
+    request is ever made, failing the whole API suite on Windows while
+    catching nothing. POSIX never hits this path, which is why it went unseen.
+    """
+    if not isinstance(address, tuple) or not address:
+        return False  # AF_UNIX path or similar — not an IP dial-out
+    host = address[0]
+    if not isinstance(host, str):
+        return False
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost"
+
+
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     """Autouse, every test: outbound sockets raise.
@@ -100,6 +126,12 @@ def no_network(monkeypatch):
     """
     del network_attempts[:]
 
+    # Captured before patching so loopback can be passed through to the real
+    # implementation rather than reimplemented.
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+    real_create_connection = socket.create_connection
+
     def _blocked(target: object) -> "NetworkUseInTestsError":
         network_attempts.append(repr(target))
         return NetworkUseInTestsError(
@@ -109,12 +141,21 @@ def no_network(monkeypatch):
         )
 
     def _connect(self, address, *args, **kwargs):  # noqa: ANN001
+        if _is_loopback(address):
+            return real_connect(self, address, *args, **kwargs)
+        raise _blocked(address)
+
+    def _connect_ex(self, address, *args, **kwargs):  # noqa: ANN001
+        if _is_loopback(address):
+            return real_connect_ex(self, address, *args, **kwargs)
         raise _blocked(address)
 
     def _create_connection(address, *args, **kwargs):  # noqa: ANN001
+        if _is_loopback(address):
+            return real_create_connection(address, *args, **kwargs)
         raise _blocked(address)
 
     monkeypatch.setattr(socket.socket, "connect", _connect, raising=True)
-    monkeypatch.setattr(socket.socket, "connect_ex", _connect, raising=True)
+    monkeypatch.setattr(socket.socket, "connect_ex", _connect_ex, raising=True)
     monkeypatch.setattr(socket, "create_connection", _create_connection, raising=True)
     yield network_attempts

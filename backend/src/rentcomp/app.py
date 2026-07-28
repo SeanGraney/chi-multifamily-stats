@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from rentcomp.api.derive import router as derive_router
+from rentcomp.api.search import router as search_router
 
 #: Env var that overrides where the built frontend is looked up. Used by
 #: tests (point it at a temp dir) and available to E2E harnesses; normal
@@ -42,7 +43,7 @@ def create_app() -> FastAPI:
     """Assemble the RentComp application.
 
     API routers from ``rentcomp.api`` are included here as later stories
-    add them (F0-S2 `/api/derive`, F3-S1 `/api/search`, ...). The built UI,
+    add them (F0-S2 `/api/derive`, F4-S9 `/api/search`, ...). The built UI,
     when present, is mounted at ``/`` *after* the API routes so it can never
     shadow ``/openapi.json`` (which F0-S1b's type codegen consumes, D12) or
     any ``/api/*`` route.
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     # registered after it, so an API route added below the mount 404s the
     # moment a UI build exists on disk (ADR-001 §4).
     app.include_router(derive_router)
+    app.include_router(search_router)
 
     dist = _ui_dist_dir()
     if dist.is_dir():

@@ -57,6 +57,7 @@ from rentcomp.models.responses import (
     DeriveMeta,
     DerivedState,
     DerivedWarning,
+    PartialPullInfo,
 )
 from rentcomp.pipeline.anchor import anchor as anchor_stage
 from rentcomp.pipeline.buckets import bucket_of, bucket_stats
@@ -109,6 +110,11 @@ class DeriveContext:
     pull_ref: str = ""
     pull_digest: str = ""
     config_digest: str = ""
+    #: The gap in this pull's evidence, if it has one (F4-S9). Read off the
+    #: pull's manifest at the edge, like `as_of` — the pipeline never looks at
+    #: a file, and "which windows are missing" is not something it could
+    #: recompute from the comps it was handed.
+    partial_pull: PartialPullInfo | None = None
 
 
 def drift_band(drift_pct: float, sensitivity_pts: float) -> Band[float]:
@@ -195,7 +201,11 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
             config_digest=ctx.config_digest,
             pipeline_version=PIPELINE_VERSION,
             config=cfg,
-            partial_pull=None,  # D24/F4-S6 names the gap; F0-S2 pulls are whole.
+            # D24/§5a: a gap in the evidence is carried in the same payload as
+            # the numbers computed from it. `None` means "no gap", never "not
+            # known" — a pull with no manifest record (a synthetic fixture) is
+            # whole by construction.
+            partial_pull=ctx.partial_pull,
         ),
     )
 
@@ -324,12 +334,19 @@ def _warnings(
 
     The `provisional_field` entries (WS-1a, ADR-002 finding 5) are the same
     self-documenting convention applied to individual FIELDS rather than
-    whole stages: `sqft_suspect`, `premium_basis`, and `partial_pull` are all
-    honest defaults for what this pipeline actually computes today, not
-    placeholders standing in for a real number — but nothing signals they are
-    provisional until F5-S1/F4-S5/F4-S6 build the real computation each one
-    is a stand-in for. Each warning is unconditional (every derive carries
-    all three) and each disappears independently as its own story lands.
+    whole stages: `sqft_suspect` and `premium_basis` are honest defaults for
+    what this pipeline actually computes today, not placeholders standing in
+    for a real number — but nothing signals they are provisional until
+    F5-S1/F4-S5 build the real computation each one is a stand-in for. Each
+    warning is unconditional and each disappears independently as its own
+    story lands.
+
+    **`partial_pull`'s entry is retired here (F4-S9).** It is no longer a
+    placeholder: the orchestrator records which planned windows never arrived
+    in the pull's manifest, and the edge hands that to `DeriveContext`, so
+    `None` now means "this pull has no gap" rather than "nobody has looked".
+    That was the whole point of the convention — the story that makes a
+    placeholder real clears its own warning.
     """
     warnings: list[DerivedWarning] = [
         DerivedWarning(
@@ -344,13 +361,6 @@ def _warnings(
             message=(
                 "premium_basis is always \"selected\" — the pulled-set fallback for thin "
                 "cohorts (F4-S5) is not built yet."
-            ),
-        ),
-        DerivedWarning(
-            code="provisional_field",
-            message=(
-                "partial_pull is always null — gap tracking for incomplete pulls "
-                "(F4-S6/D24) is not built yet."
             ),
         ),
     ]

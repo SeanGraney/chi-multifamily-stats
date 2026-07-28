@@ -1,4 +1,7 @@
-"""Layer 3, inbound half — the `/api/derive` request contract (ADR-001 §1.1).
+"""Layer 3, inbound half — the API's request contracts (ADR-001 §1.1).
+
+`DeriveRequest` (the curation state) and `SearchRequest` (the pull's
+parameters) both live here; `responses.py` is the outbound half of each.
 
 `responses.py` is the outbound half. Both codegen into TypeScript (D12), so
 what is expressible here is exactly what a client may send.
@@ -28,7 +31,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["DeriveRequest", "Filters", "Subject", "Weight"]
+__all__ = ["DeriveRequest", "Filters", "SearchRequest", "Subject", "Weight"]
 
 #: A curation weight. Non-negative: a negative weight has no meaning in this
 #: system and would silently corrupt every weighted statistic downstream, so
@@ -90,3 +93,40 @@ class DeriveRequest(BaseModel):
     drift_pct: float = 0.0
     #: `None` on the Results view — no price has been tested yet.
     candidate_rent: float | None = Field(default=None, gt=0.0)
+
+
+class SearchRequest(BaseModel):
+    """The subject + comp-net definition a search form submits (F2-S1/F4-S9).
+
+    Deliberately the *pull's* parameters and nothing else: the subject's own
+    sqft, the drift assumption and every curation knob belong to
+    `DeriveRequest`, because none of them change which records come back.
+    Keeping them out is what makes the cache key a function of the search
+    (F3-S1) rather than of everything the user has touched since.
+
+    `extra="forbid"` for the same reason as `DeriveRequest`: a typo'd field
+    here would silently widen or narrow a pull that costs real money.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    address: str
+    #: Miles. Bounded so a slip of a decimal point cannot ask for a pull the
+    #: whole city answers.
+    radius: float = Field(gt=0.0, le=100.0)
+    #: RentCast range syntax, passed through verbatim (`"3"`, `"3:4"`) — only
+    #: the caller knows whether an exact match or a range was meant (F2-S2).
+    bedrooms: str
+    #: Absent means NO `bathrooms` filter on the wire, which is not the same
+    #: as an empty one: an empty filter makes RentCast exclude records whose
+    #: bathroom count is missing (T-S3 round 2).
+    bathrooms: str | None = None
+    property_types: list[str] = Field(min_length=1)
+    #: F2's 1-5 cohort years.
+    years_back: int = Field(ge=1, le=5)
+    #: `"MM-DD"`. The seasonal window, identical in every cohort year.
+    window_start: str
+    window_end: str
+    #: The user's explicit consent to re-spend on evidence already on disk —
+    #: set only by the REFRESH click in F3-S2's cache modal.
+    force_refresh: bool = False

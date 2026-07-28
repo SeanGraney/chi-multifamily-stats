@@ -63,6 +63,7 @@ __all__ = [
     "Neighbor",
     "PartialPullInfo",
     "PriceTest",
+    "SearchResult",
 ]
 
 T = TypeVar("T")
@@ -444,3 +445,41 @@ class DerivedState(BaseModel):
     breakdown: Breakdown
     warnings: list[DerivedWarning]
     meta: DeriveMeta
+
+
+class SearchResult(BaseModel):
+    """What `POST /api/search` answers (F4-S9) — the outcome of a pull.
+
+    No comps: evidence is addressed by reference (`pull_ref`) and fetched by
+    `POST /api/derive`, the same reason `DeriveRequest` carries a ref rather
+    than an uploaded comp list (ADR-001 §1.1).
+
+    The cost fields exist so the user can never be surprised by a spend:
+    `estimated_calls` is what a full (re)pull of this search costs,
+    `calls_spent` is what this request actually cost, and `calls_to_complete`
+    is what finishing an incomplete pull would cost. All three count the same
+    unit — one fetchable query — so F2-S3's [INVARIANT] ("the number displayed
+    and the number spent are one number") holds across the whole flow.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: The ref `POST /api/derive` resolves. A function of the search params
+    #: alone, so an identical search always addresses the same evidence.
+    pull_ref: str
+    #: What was already on disk when this search arrived: `miss` (nothing),
+    #: `hit` (a whole pull), `stale` (an entry with a gap in it). F3-S2's
+    #: modal branches on this to offer USE CACHED vs REFRESH.
+    cache_status: Literal["hit", "miss", "stale"]
+    #: `len(fetchable_queries(plan))` — what a full pull of this search costs.
+    #: Structurally-empty windows are planned and never sent, so they are
+    #: never billed to the user in an estimate either (F4-S1 AC4).
+    estimated_calls: int
+    #: Calls this request spent. Zero in fixture mode and zero when the
+    #: evidence was already on disk.
+    calls_spent: int
+    complete: bool
+    #: One label per window that never arrived ("2025 Inactive"), so a gap can
+    #: be named rather than merely counted (D24 §5a).
+    missing: list[str]
+    calls_to_complete: int

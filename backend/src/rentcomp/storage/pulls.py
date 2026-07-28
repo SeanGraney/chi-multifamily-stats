@@ -143,12 +143,18 @@ def load_shaped_pull(pull_ref: str, config: Config) -> ShapedPull:
     """Resolve `pull_ref` to shaped comps. Raises `PullNotFoundError` if absent.
 
     Memoized per ADR-001 §3 (~4 workspaces). The ADR's key is
-    `(pull_ref, pull_digest, config, as_of)`; the cache below keys on
-    `(store root, pull_ref, config)` instead, because the digest and the fetch
-    date are *functions of the file at that ref*, and `cache/` is immutable raw
-    responses by construction (ARCHITECTURE.md §5) — a refresh writes a new
-    ref, it never rewrites one. Logged as a [DEFAULT] deviation in the F0-S2
-    handoff.
+    `(pull_ref, pull_digest, config, as_of)`; F0-S2 dropped the digest and keyed
+    on `(store root, pull_ref, config)` on the premise that "a refresh writes a
+    new ref, it never rewrites one".
+
+    **F4-S9 restores the digest, because that premise is false.** Completing a
+    partial pull (§5a: "a pull interrupted at 3/4 costs exactly 1 call to
+    finish") appends new evidence *under the existing ref* — so a memo that
+    ignores content keeps serving the pre-completion comps forever, and a
+    missing cohort skews every number downstream (D24 §5a). What goes in the
+    key is `_evidence_version` (below), not a content hash: a hash would mean
+    re-reading and re-digesting every raw byte on the request path the memo
+    exists to keep off disk.
 
     The **root is in the key** and is resolved on every call, not at import:
     an E2E harness (or a Layer-2 test) points the store at a temp directory
@@ -162,11 +168,42 @@ def load_shaped_pull(pull_ref: str, config: Config) -> ShapedPull:
     A pure function cache: same key ⇒ same value, so it cannot affect
     idempotence. Tests that rewrite a store in place call `.cache_clear()`.
     """
-    return _shaped_pull(fixture_pulls_dir(), pull_ref, config)
+    return _shaped_pull(fixture_pulls_dir(), pull_ref, config, _evidence_version(pull_ref))
+
+
+def _evidence_version(pull_ref: str) -> str:
+    """A cheap fingerprint of the raw responses currently filed under a
+    cache-backed ref — the memo's staleness guard (see `load_shaped_pull`).
+
+    `(name, size, mtime_ns)` per raw file rather than a digest of their
+    contents. `cache/` is append-only immutable evidence by construction
+    (ARCHITECTURE.md §5): the only way the shaped result can change is a file
+    appearing, and that is visible in the name set alone. Size and mtime are
+    belt-and-braces for an in-place rewrite, and cost two `stat` calls per
+    file against the whole-file read a hash would need.
+
+    Empty string for everything that is not a cache-backed ref (synthetic
+    pulls, `ws1-real`): those are read-only fixtures nothing appends to, and
+    probing them per request would put I/O back on the hot path for no gain.
+    """
+    try:
+        if not _looks_like_cache_key(_safe_ref(pull_ref)):
+            return ""
+        parts = []
+        for path in raw_response_paths(pull_ref):
+            stat = path.stat()
+            parts.append(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}")
+        return "|".join(parts)
+    except (PullNotFoundError, OSError):
+        # An unreadable/absent entry versions as "nothing"; `_shaped_pull`
+        # below is what turns that into the right typed error.
+        return ""
 
 
 @lru_cache(maxsize=4)
-def _shaped_pull(root: Path, pull_ref: str, config: Config) -> ShapedPull:
+def _shaped_pull(
+    root: Path, pull_ref: str, config: Config, evidence_version: str
+) -> ShapedPull:
     # F3-S1 ordering gotcha (PM-relayed): the sanitizer runs FIRST, before any
     # special-case branch does a lookup. The WS-1 branch below used to run
     # ahead of `_safe_ref` because "ws1-real" is a fixed constant that can

@@ -34,11 +34,16 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import {
+  REPO_ROOT,
+  VENV_RENTCOMP,
+  VENV_RENTCOMP_HINT,
+  NPM,
+  NPM_NEEDS_SHELL,
+} from "./support/local-server";
 
-const REPO_ROOT = path.resolve(__dirname, "../..");
 const FRONTEND_DIR = path.join(REPO_ROOT, "frontend");
 const FRONTEND_DIST = path.join(FRONTEND_DIR, "dist");
-const VENV_RENTCOMP = path.join(REPO_ROOT, ".venv", "bin", "rentcomp");
 const BASE_URL = "http://127.0.0.1:8000";
 
 test.describe.configure({ mode: "serial" });
@@ -67,13 +72,13 @@ test.beforeAll(async () => {
     return;
   }
   if (!existsSync(VENV_RENTCOMP)) {
-    buildFailure = ".venv/bin/rentcomp not found — expected `pip install -e backend/` (F0-S1a, already on main)";
+    buildFailure = `${VENV_RENTCOMP_HINT} not found — expected \`pip install -e backend/\` (F0-S1a, already on main)`;
     return;
   }
 
   try {
-    execFileSync("npm", ["install"], { cwd: FRONTEND_DIR, stdio: "pipe" });
-    execFileSync("npm", ["run", "build"], { cwd: FRONTEND_DIR, stdio: "pipe" });
+    execFileSync(NPM, ["install"], { cwd: FRONTEND_DIR, stdio: "pipe", shell: NPM_NEEDS_SHELL });
+    execFileSync(NPM, ["run", "build"], { cwd: FRONTEND_DIR, stdio: "pipe", shell: NPM_NEEDS_SHELL });
   } catch (err: any) {
     buildFailure = `npm install/build failed: ${err?.stderr?.toString?.() ?? err}`;
     return;

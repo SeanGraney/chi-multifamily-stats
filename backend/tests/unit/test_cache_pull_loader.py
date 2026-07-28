@@ -135,11 +135,26 @@ def test_a_real_cache_key_resolves_through_the_cache_not_synthetic_pulls(home: P
 def test_as_of_comes_from_the_manifest_never_from_the_caller_or_wall_clock(home: Path) -> None:
     """PM-relayed AC (3): as_of is a function of the ref's own manifest. Two
     cache entries pulled "on different days" (different `as_of`) must
-    resolve to their OWN as_of, not today's real date and not each other's."""
+    resolve to their OWN as_of, not today's real date and not each other's.
+
+    Fixture note (QA self-fix, F3-S1 verify pass): the record used here must
+    have been "listed" before the manifest's own as_of, or `_build_comp`'s
+    `effective_dom = as_of - listed` goes negative and `StitchedComp`'s
+    `effective_dom >= 0` constraint raises before this test's actual
+    assertion ever runs. `ACTIVE_RECORD` is listed 2026-02-01, so this test
+    uses its own copy listed well before the manifest's as_of (2020-01-01)
+    instead — the point (as_of comes from the manifest, not wall clock or
+    the caller) is unchanged; as_of=2020-01-01 is unambiguously not today's
+    real date either way.
+    """
     import json
 
+    as_of_only_record = {**ACTIVE_RECORD, "id": "listing-cache-as-of", "listedDate": "2019-06-01T00:00:00.000Z"}
+
     key = cache_key({"address": "3 Cache Test St, Chicago, IL 60609", "years_back": 1})
-    write_raw_response(key, "y2026-active-off000", json.dumps([ACTIVE_RECORD]).encode(), meta={"status": "Active"})
+    write_raw_response(
+        key, "y2026-active-off000", json.dumps([as_of_only_record]).encode(), meta={"status": "Active"}
+    )
     write_raw_response(key, "y2025-inactive-off000", json.dumps([]).encode(), meta={"status": "Inactive"})
     write_manifest(key, as_of=date(2020, 1, 1), window=("01-01", "12-31"))
 

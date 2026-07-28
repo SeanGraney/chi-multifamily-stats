@@ -221,8 +221,8 @@ def _band_guard_reason(
     no matter how close those neighbours are.
     """
     reasons = [
-        _edge_guard_reason(indices, candidate, comps, premiums)
-        for indices, candidate in zip(per_edge.values(), candidates, strict=True)
+        _edge_guard_reason(per_edge[edge], candidate, comps, premiums)
+        for edge, candidate in zip(EDGES, candidates, strict=True)
     ]
     if "all_censored" in reasons:
         return "all_censored"
@@ -240,10 +240,16 @@ def _edge_guard_reason(
     """F11-S3's trip rule at one drift point."""
     if indices and all(comps[index].censored for index in indices):
         return "all_censored"
+    # A comp with no premium is in range of nothing. Retrieval already excludes
+    # them from the pool, so the `is not None` here is a guard against a
+    # falsy-zero bug rather than a live branch: premium 0.0 is both extremely
+    # common in this data and exactly on the candidate, so `premiums[i] or 0.0`
+    # would read correctly and be wrong the moment the pool ever admitted None.
     in_range = sum(
         1
         for index in indices
-        if abs(candidate - (premiums[index] or 0.0)) <= IN_RANGE_DISTANCE
+        if premiums[index] is not None
+        and abs(candidate - premiums[index]) <= IN_RANGE_DISTANCE
     )
     if in_range < MIN_USABLE_IN_RANGE:
         return "too_few_in_range"

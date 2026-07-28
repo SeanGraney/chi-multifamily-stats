@@ -83,16 +83,15 @@ __all__ = [
 DRIFT_SENSITIVITY_PTS = 2.0
 
 #: Bumped when the derivation changes in a way that changes output values.
-#: WS-1 replaces record shaping (F4-S3/S4/S8), the anchor (F8-S1), bucket
+#: WS-1 replaced record shaping (F4-S3/S4/S8), the anchor (F8-S1), bucket
 #: outcome stats (F10-S1) and kNN retrieval (F11-S1) with real
-#: implementations, so the `-stubs` marker (and the `stub_stage` warnings
-#: that went with it) retire here. What remains genuinely unbuilt — the
-#: Kaplan-Meier curve (F11-S2) and F11-S3's guard-vs-curve branch selection —
-#: is not a stubbed *number* the way the others were: the price test always
-#: returns the guard branch (`GuardResult`), which is the honest terminal
-#: state NORTH_STAR names for evidence this thin, not a placeholder standing
-#: in for a curve. See `pipeline/pricetest.py`.
-PIPELINE_VERSION = "0.1.0-ws1"
+#: implementations, retiring the `-stubs` marker and the `stub_stage`
+#: warnings that went with it. F11-S2 supplies the last missing arm of the
+#: price test: the Kaplan-Meier curve now exists, so a well-evidenced
+#: candidate returns a `CurveResult` instead of a guard that had no curve to
+#: offer. That changes real output values, hence the bump. F11-S3 still owns
+#: the guard's trip *thresholds*. See `pipeline/pricetest.py`.
+PIPELINE_VERSION = "0.1.0-f11s2"
 
 
 @dataclass(frozen=True, slots=True)

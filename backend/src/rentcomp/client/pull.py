@@ -179,6 +179,7 @@ def run_pull(
     window_start_mmdd: str,
     window_end_mmdd: str,
     today: date,
+    force_refresh: bool = False,
     transport: httpx.BaseTransport | None = None,
 ) -> PullOutcome:
     """Run a whole plan: fetch what is owed, keep every response, mint a ref.
@@ -192,6 +193,13 @@ def run_pull(
     (`MissingApiKeyError`).
 
     Args:
+        force_refresh: re-fetch every fetchable window, including the ones
+            already on disk. This is the user's explicit REFRESH click (F3-S2)
+            and nothing else sets it — it is the difference between "finish
+            what I paid for" and "go buy it again". Responses land in the same
+            cache entry, overwriting per call; **reconciling a refresh against
+            the previous set (spec §7's "never mix fresh and stale") belongs to
+            F3-S3/F13-S1** and is deliberately not attempted here.
         transport: an `httpx.BaseTransport` for `RentCastClient` to send
             through. This is how a test exercises the live path without
             spending a call — and it is **not** consent: with no
@@ -227,7 +235,7 @@ def run_pull(
     )
     window = (window_start_mmdd, window_end_mmdd)
 
-    known = _known_queries(key)
+    known = {} if force_refresh else _known_queries(key)
     owed = [query for query in fetchable if not _is_satisfied(known.get(_sig(query)))]
 
     if not owed:

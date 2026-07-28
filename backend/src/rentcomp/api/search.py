@@ -83,6 +83,7 @@ def post_search(request: SearchRequest) -> SearchResult:
         try:
             outcome = run_pull(
                 **search,
+                force_refresh=request.force_refresh,
                 # The one legitimate clock reading in the whole pull path. It
                 # becomes the manifest's `as_of`, which is the pipeline's only
                 # "now" (owner ruling 1) — data from here down, never ambient.

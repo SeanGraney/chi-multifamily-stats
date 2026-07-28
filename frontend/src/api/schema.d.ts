@@ -17,6 +17,20 @@ export interface paths {
      */
     post: operations["post_derive_api_derive_post"];
   };
+  "/api/search": {
+    /**
+     * Run (or resolve) a pull
+     * @description Resolve a search to a `pull_ref`, fetching only if it must (see module
+     * docstring).
+     *
+     * 422 for a window/params the planner refuses, 402 when the month cannot
+     * afford the pull, 400 when live mode is configured wrong. A per-query
+     * failure is NOT an error: the answer is a 200 whose `complete` is false and
+     * whose `missing` names the windows that never arrived (§5a — an incomplete
+     * first pull is usable, with the gap named loudly).
+     */
+    post: operations["post_search_api_search_post"];
+  };
 }
 
 export type webhooks = Record<string, never>;
@@ -546,6 +560,76 @@ export interface components {
       calls_to_complete: number;
     };
     /**
+     * SearchRequest
+     * @description The subject + comp-net definition a search form submits (F2-S1/F4-S9).
+     *
+     * Deliberately the *pull's* parameters and nothing else: the subject's own
+     * sqft, the drift assumption and every curation knob belong to
+     * `DeriveRequest`, because none of them change which records come back.
+     * Keeping them out is what makes the cache key a function of the search
+     * (F3-S1) rather than of everything the user has touched since.
+     *
+     * `extra="forbid"` for the same reason as `DeriveRequest`: a typo'd field
+     * here would silently widen or narrow a pull that costs real money.
+     */
+    SearchRequest: {
+      /** Address */
+      address: string;
+      /** Radius */
+      radius: number;
+      /** Bedrooms */
+      bedrooms: string;
+      /** Bathrooms */
+      bathrooms?: string | null;
+      /** Property Types */
+      property_types: string[];
+      /** Years Back */
+      years_back: number;
+      /** Window Start */
+      window_start: string;
+      /** Window End */
+      window_end: string;
+      /**
+       * Force Refresh
+       * @default false
+       */
+      force_refresh?: boolean;
+    };
+    /**
+     * SearchResult
+     * @description What `POST /api/search` answers (F4-S9) — the outcome of a pull.
+     *
+     * No comps: evidence is addressed by reference (`pull_ref`) and fetched by
+     * `POST /api/derive`, the same reason `DeriveRequest` carries a ref rather
+     * than an uploaded comp list (ADR-001 §1.1).
+     *
+     * The cost fields exist so the user can never be surprised by a spend:
+     * `estimated_calls` is what a full (re)pull of this search costs,
+     * `calls_spent` is what this request actually cost, and `calls_to_complete`
+     * is what finishing an incomplete pull would cost. All three count the same
+     * unit — one fetchable query — so F2-S3's [INVARIANT] ("the number displayed
+     * and the number spent are one number") holds across the whole flow.
+     */
+    SearchResult: {
+      /** Pull Ref */
+      pull_ref: string;
+      /**
+       * Cache Status
+       * @enum {string}
+       */
+      cache_status: "hit" | "miss" | "stale";
+      /** Estimated Calls */
+      estimated_calls: number;
+      /** Calls Spent */
+      calls_spent: number;
+      /** Complete */
+      complete: boolean;
+      /** Missing */
+      missing: string[];
+      /** Calls To Complete */
+      calls_to_complete: number;
+    };
+    /**
      * Subject
      * @description The unit being priced. Not a comp: it is never evidence for itself.
      */
@@ -610,6 +694,38 @@ export interface operations {
       200: {
         content: {
           "application/json": components["schemas"]["DerivedState"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Run (or resolve) a pull
+   * @description Resolve a search to a `pull_ref`, fetching only if it must (see module
+   * docstring).
+   *
+   * 422 for a window/params the planner refuses, 402 when the month cannot
+   * afford the pull, 400 when live mode is configured wrong. A per-query
+   * failure is NOT an error: the answer is a 200 whose `complete` is false and
+   * whose `missing` names the windows that never arrived (§5a — an incomplete
+   * first pull is usable, with the gap named loudly).
+   */
+  post_search_api_search_post: {
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SearchRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["SearchResult"];
         };
       };
       /** @description Validation Error */

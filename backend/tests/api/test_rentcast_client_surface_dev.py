@@ -64,6 +64,14 @@ def home(tmp_path, monkeypatch) -> Path:
     monkeypatch.setenv("RENTCOMP_HOME", str(root))
     monkeypatch.delenv("RENTCOMP_LIVE", raising=False)
     monkeypatch.delenv("RENTCAST_API_KEY", raising=False)
+    # F3-S1 note: a truly untouched `home` now seeds itself from the gate's
+    # spend on first `load_ledger()` read (a real behavioural change, not a
+    # test bug — see `storage/ledger.py::_seed_from_gate`). This file's own
+    # tests assert exact call counts starting from zero, so an explicit
+    # zero-call ledger keeps them isolated from that unrelated feature.
+    (root / "ledger.json").write_text(
+        json.dumps({"calls_this_month": 0, "history": []}), encoding="utf-8"
+    )
     return root
 
 

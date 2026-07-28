@@ -453,17 +453,38 @@ def test_a_stamp_for_a_future_month_does_not_hand_calls_back(home) -> None:
     assert ledger.month == current_month()
 
 
-def test_loading_a_ledger_never_writes_anything(home) -> None:
-    """Fixture mode must be able to run on a machine with no `~/.rentcomp`, and
-    a *read* that created a ledger would make "the suite spends nothing"
-    depend on nobody ever looking."""
-    assert load_ledger().calls_this_month == 0
-    assert not home.exists()
-
+def test_loading_a_ledger_with_a_real_file_present_never_writes_anything(home) -> None:
+    """Once a real `ledger.json` exists, reading it is a pure read — no
+    `load_ledger()` call may ever mutate a home that already has its own
+    recorded state, seeded or not (F3-S1 only writes on the ONE-TIME seed of
+    a home that has never run before; see the test below)."""
     write_ledger(home, {"month": month_offset(-1), "calls_this_month": 9, "history": []})
     before = ledger_path().read_bytes()
     load_ledger()
     assert ledger_path().read_bytes() == before, "a rolled-over month was persisted by a read"
+
+
+def test_a_truly_fresh_home_is_seeded_and_persisted_on_first_read(home) -> None:
+    """F3-S1 (PM ruling, dispatch item 1): a machine that has never run this
+    product before — no `~/.rentcomp` at all — must not start the 50/month
+    cap at zero when the gate has already spent real calls. This SUPERSEDES
+    the pre-F3-S1 version of this test (`test_loading_a_ledger_never_writes_
+    anything`), which asserted the exact opposite (`calls_this_month == 0`,
+    `not home.exists()`) — that was the correct contract for F0-S4's
+    mechanism-only scope and is now the bug F3-S1 exists to close (see
+    `storage/ledger.py::_seed_from_gate`'s docstring).
+
+    The seed is the ONE deliberate exception to "load_ledger() never
+    writes": it persists so a second read never re-seeds (see the
+    `test_seeding_never_double_counts_on_a_second_read` family in
+    `tests/api/test_f3s1_ledger_seed.py`, which owns the seed's own
+    behavioural AC end to end)."""
+    assert not home.exists()
+    ledger = load_ledger()
+    assert ledger.calls_this_month == 8, "the gate's committed spend (fixtures/live-samples/ledger.json)"
+    assert home.exists() and (home / "ledger.json").exists(), (
+        "the seed must be persisted, not recomputed from the fixture on every read"
+    )
 
 
 @pytest.mark.parametrize(

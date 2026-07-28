@@ -75,11 +75,12 @@ The **test plan table is mandatory** — every acceptance criterion appears exac
 **Hard rule: a branch's regression run only counts if the branch is up to date with the parent it merges into.** Concretely, before the final run QA must verify its branch is THE latest:
 
 ```
-git fetch origin
-git merge origin/story/<id>     # qa branch absorbs latest dev work
-git merge origin/main           # and latest main — resolve conflicts NOW, not at merge time
+git merge story/<id>            # qa branch absorbs latest dev work
+git merge main                  # and latest LOCAL main — resolve conflicts NOW, not at merge time
 npx playwright test             # full repo suite, not just this story's spec
 ```
+
+**This repo has no per-story remote push** (`git status` on `main` runs 100+ commits ahead of `origin/main` by design — see `PROJECT_MANAGER.md`'s dispatch protocol, all branches are local). `git fetch origin` / `git merge origin/main` is therefore a **no-op that looks like a sync but isn't one** — it silently skips whatever landed on local `main` since the story branch was cut, which is exactly the class of miss this rule exists to prevent. Merge the **local** branch names (`story/<id>`, `main`), never the `origin/*` refs, unless this project's workflow changes to push per story. (Found 2026-07-27: F3-S1's QA verify merged `origin/main` per the old wording here, got "already up to date," and consequently never tested against F2-S2's same-session merge to local `main` — harmless that time since the two stories touched disjoint files and the PM's own post-merge regression on main caught it, but it was luck, not the gate working as designed.)
 
 If either merge brings changes, the previous test results are void — rerun. This is how we guarantee regression tests never break from unseen merge conflicts: conflicts are surfaced and resolved on the QA branch *before* the suite runs, and the suite that goes green is the suite that will exist on main after merge.
 

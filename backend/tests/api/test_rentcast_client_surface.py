@@ -479,7 +479,15 @@ def test_the_cap_is_fifty(home: Path) -> None:
 @needs_ledger
 def test_every_sent_request_is_counted_at_send_time(live_client, home: Path) -> None:
     """D24/§5a: "the ledger increments when a request is *sent*, not when a
-    batch completes — the quota is spent either way"."""
+    batch completes — the quota is spent either way".
+
+    `seed_ledger(home, 0)` (F3-S1 note): a truly untouched `home` now seeds
+    itself from the gate's spend on first read (F3-S1's lazy-seed AC) — a
+    real behavioural change to `load_ledger()`, not a test bug. Writing an
+    explicit zero-call ledger keeps this test's own invariant (sent requests
+    increment the count 1:1) isolated from that unrelated feature.
+    """
+    seed_ledger(home, 0)
     client, recorder = live_client(paged(690))
     client.fetch_listings(dict(QUERY))
     assert load_ledger().calls_this_month == 2 == len(recorder.requests)
@@ -489,7 +497,12 @@ def test_every_sent_request_is_counted_at_send_time(live_client, home: Path) -> 
 @needs_ledger
 def test_a_failed_call_still_counts_against_the_month(live_client, home: Path) -> None:
     """RentCast charged for it. A ledger that only counts successes drifts
-    below the truth and the cap stops protecting anything."""
+    below the truth and the cap stops protecting anything.
+
+    `seed_ledger(home, 0)` — see the F3-S1 note on
+    `test_every_sent_request_is_counted_at_send_time`.
+    """
+    seed_ledger(home, 0)
     client, _ = live_client(constant(429))
     with pytest.raises(RateLimitError):
         client.fetch_listings(dict(QUERY))

@@ -10,10 +10,17 @@ The reason this is a *module* and not three lookalike helpers: the wire keys
 imports this one.
 
 SCOPE: F0-S2 pins the module path, the two-argument signature, and the
-minimum normalization a key must survive (case and whitespace). The full
-normalization *rules* — what counts as the same street address, e.g.
-"W" vs "West", "#3" vs "Unit 3" — are F13-S1's, and they can tighten this
-function without changing a single call site.
+minimum normalization a key must survive (case and whitespace). **F4-S2
+[INVARIANT] owns the normalization rules themselves** — "normalize
+address+unit (case, abbreviations, unit designators) as the grouping key",
+because F4-S2 is where "which listings are the same unit" is decided. F13-S1
+owns *re-keying curation state with* those rules after a refresh, not
+authoring them.
+
+(Erratum, corrected under F4-S2: this docstring previously deferred the
+abbreviation and unit-designator rules — its own "'W' vs 'West', '#3' vs
+'Unit 3'" examples — to F13-S1. That contradicted F4-S2's story text, which
+is the spec. PM ruling, logged on F4-S2.)
 """
 
 from __future__ import annotations
@@ -32,17 +39,96 @@ __all__ = ["comp_key", "disambiguate_keys"]
 #: never collapse onto one key by concatenation.
 _SEPARATOR = "|"
 
+#: F4-S2 [INVARIANT], the "abbreviations" half: one spelling per address
+#: token, so a pull that writes "3651 South Wood Street" on one listing and
+#: "3651 S Wood St" on another does not split one unit into two comps.
+#:
+#: Every entry is a *spelling* canonicalization — a long form mapped onto its
+#: already-standard short form. Nothing is ever deleted, which is what keeps
+#: this from over-merging: "100 S St Louis Ave" and "100 S Louis Ave" stay
+#: distinct because the "St" in "St Louis" survives normalization as a token
+#: even though it is not a street suffix. Deleting suffixes (rather than
+#: canonicalizing them) would collapse those two real Chicago addresses.
+_ADDRESS_ABBREVIATIONS = {
+    # street types (USPS standard suffix abbreviations)
+    "street": "st",
+    "avenue": "ave",
+    "av": "ave",
+    "boulevard": "blvd",
+    "road": "rd",
+    "drive": "dr",
+    "lane": "ln",
+    "court": "ct",
+    "place": "pl",
+    "terrace": "ter",
+    "parkway": "pkwy",
+    "highway": "hwy",
+    "circle": "cir",
+    "square": "sq",
+    "trail": "trl",
+    "plaza": "plz",
+    # directionals
+    "north": "n",
+    "south": "s",
+    "east": "e",
+    "west": "w",
+    "northeast": "ne",
+    "northwest": "nw",
+    "southeast": "se",
+    "southwest": "sw",
+}
 
-def _normalize(part: str | None) -> str:
-    """Casefold, collapse internal runs of whitespace, strip the ends.
+#: F4-S2 [INVARIANT], the "unit designators" half: the leading word that
+#: labels a unit carries no identity — `Unit 3`, `Apt 3`, `# 3`, `#3` and a
+#: bare `3` are one physical unit. Observed on the committed 539-record pull:
+#: `Unit` x346, `Apt` x94, `#` x3.
+#:
+#: The designator is only ever dropped when it is the *whole first token*, so
+#: `Units 1-2` (a label, not a designator) is left alone, and the label that
+#: follows it is never touched — `Unit 1F` and `Unit 1R` stay two units.
+_UNIT_DESIGNATORS = frozenset({"unit", "apt", "apartment", "#"})
 
-    `str.split()` with no argument splits on arbitrary whitespace runs
-    (including tabs and newlines), so this is total over the whitespace the
-    API and hand-typed addresses actually contain.
+#: Punctuation that carries no identity at a token's edge: "St." is "St",
+#: "#3" is unit "3".
+_TRIM = ".,"
+
+
+def _tokens(part: str | None) -> list[str]:
+    """Casefold, split on arbitrary whitespace runs, trim edge punctuation.
+
+    `str.split()` with no argument splits on any whitespace run (including
+    tabs and newlines), so this is total over the whitespace the API and
+    hand-typed addresses actually contain.
     """
     if part is None:
+        return []
+    return [trimmed for token in part.casefold().split() if (trimmed := token.strip(_TRIM))]
+
+
+def _normalize_address(address: str | None) -> str:
+    """Case/whitespace/punctuation-insensitive, one spelling per token."""
+    return " ".join(_ADDRESS_ABBREVIATIONS.get(token, token) for token in _tokens(address))
+
+
+def _normalize_unit(unit: str | None) -> str:
+    """The unit label with its designator stripped, or "" if there is none."""
+    tokens = _tokens(unit)
+    if not tokens:
         return ""
-    return " ".join(part.split()).casefold()
+
+    first = tokens[0]
+    if first in _UNIT_DESIGNATORS:
+        rest = tokens[1:]
+    elif first.startswith("#"):
+        rest = [first.lstrip("#"), *tokens[1:]]
+    else:
+        rest = tokens
+
+    # A designator with nothing after it *is* the label (a listing whose
+    # `addressLine2` is literally "Unit"); dropping it would key that comp as
+    # the whole building.
+    label = " ".join(token for token in rest if token)
+    return label or " ".join(tokens)
 
 
 def comp_key(address: str, unit: str | None) -> str:
@@ -52,7 +138,7 @@ def comp_key(address: str, unit: str | None) -> str:
     whole building, or a listing that never named its unit) is not the same
     listing as "1234 W Fake St #2".
     """
-    return f"{_normalize(address)}{_SEPARATOR}{_normalize(unit)}"
+    return f"{_normalize_address(address)}{_SEPARATOR}{_normalize_unit(unit)}"
 
 
 def disambiguate_keys(comps: Sequence["StitchedComp"]) -> list[str]:

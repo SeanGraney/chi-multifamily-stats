@@ -416,7 +416,7 @@ def test_seam_the_anchor_echoes_the_drift_it_was_asked_for() -> None:
 def test_seam_the_price_test_needs_both_a_candidate_and_an_anchor() -> None:
     drift = drift_band(7.0, DRIFT_SENSITIVITY_PTS)
     anchor_value = anchor(["a"], [2.0], [2026], [1.0], [True], drift, 1000.0, 2026)
-    args = ([make_comp()], ["a"], [0.0], [1.0], [True], 7, 4.0)
+    args = ([make_comp()], ["a"], [0.0], [1.0], [True], 7, 4.0, (14, 30, 45, 60))
     assert price_test(None, anchor_value, *args) is None
     assert price_test(2100.0, None, *args) is None, (
         "with no anchor there is no premium scale to express the candidate against; "
@@ -444,7 +444,7 @@ def test_seam_the_price_test_result_only_cites_comps_that_are_in_the_analysis() 
         drift_band(7.0, DRIFT_SENSITIVITY_PTS), 1000.0, 2026,
     )
     result = price_test(2100.0, anchor_value, comps, ["a", "b"], [0.0, None], [1.0, 0.0],
-                        [True, False], 7, 4.0)
+                        [True, False], 7, 4.0, (14, 30, 45, 60))
     assert result is not None
     assert {neighbor.key for neighbor in result.neighbors} <= {"a"}
 
@@ -457,7 +457,9 @@ def test_seam_the_price_test_guards_on_genuinely_thin_evidence() -> None:
     anchor_value = anchor(
         ["a"], [2.0], [2026], [1.0], [True], drift_band(7.0, DRIFT_SENSITIVITY_PTS), 1000.0, 2026
     )
-    result = price_test(2100.0, anchor_value, [make_comp()], ["a"], [0.0], [1.0], [True], 7, 4.0)
+    result = price_test(
+        2100.0, anchor_value, [make_comp()], ["a"], [0.0], [1.0], [True], 7, 4.0, (14, 30, 45, 60)
+    )
     assert result is not None
     assert result.state == "insufficient_evidence"
     assert result.reason == "too_few_in_range"

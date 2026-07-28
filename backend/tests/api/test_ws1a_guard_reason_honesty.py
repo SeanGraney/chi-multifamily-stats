@@ -84,10 +84,28 @@ def test_reason_is_never_too_few_in_range_when_the_real_evidence_is_not_thin(der
     response = derive(pull_ref="ws1-real", candidate_rent=at_market_rent)
     assert response.status_code == 200, response.text[:600]
     price_test = response.json()["price_test"]
-    assert price_test is not None and price_test["state"] == "insufficient_evidence", (
-        "F11-S2/curve is out of scope for this story — a GuardResult is still expected here, "
-        f"got {price_test!r}"
-    )
+    assert price_test is not None
+
+    # F11-S2 EDIT (developer, flagged to the PM for QA's independent review).
+    # The original assertion here was `state == "insufficient_evidence"`,
+    # justified by this module's own SCOPE NOTE: "F11-S2 ... remain explicitly
+    # out of scope for this story (`CurveResult` cannot be constructed yet).
+    # That means: even in the well-evidenced case above, the endpoint has no
+    # way to return anything but a `GuardResult`." That premise is exactly
+    # what F11-S2 retires — the estimator now exists, and this rent (the real
+    # pull's own anchor, 21 uncensored neighbours all within +/-3 premium
+    # points) is precisely where the curve branch is supposed to win.
+    #
+    # The test's actual CLAIM is untouched: "`too_few_in_range` cannot be
+    # honestly reported here." A curve satisfies that strictly more strongly
+    # than a differently-reasoned guard does, so the claim is asserted against
+    # whichever branch the endpoint returns rather than against a branch
+    # choice this module never owned.
+    if price_test["state"] == "curve":
+        assert "reason" not in price_test, (
+            "a CurveResult carries a guard reason — the two arms must not be confusable"
+        )
+        return
 
     in_range = _usable_in_range_count(price_test["neighbors"])
     all_censored = bool(price_test["neighbors"]) and all(

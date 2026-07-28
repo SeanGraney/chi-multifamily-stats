@@ -160,6 +160,7 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
         included,
         cfg.knn_k,
         cfg.bucket_half_width_pct,
+        cfg.km_horizons_days,
     )
 
     contributions = contribution_shares(weights, included)

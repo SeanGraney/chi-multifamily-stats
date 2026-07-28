@@ -35,13 +35,15 @@ A handoff holds only what dies with the session: what is mid-flight and exactly 
 
 **Make interruption cheap everywhere else too.** Put "commit early and often" in every dispatch — agents that die holding uncommitted work are the only thing that has actually cost this project time. When an agent does die, **inspect the tree read-only before deciding anything**: more than once the work was complete and needed only committing, and a reflexive re-dispatch would have thrown it away. Prefer resuming a dead agent by message (its context is restored intact) over spawning a fresh one.
 
-## Skills you must use
+## Skills and review agents — what actually exists
 
-The **product-management plugin** is installed on this machine. Use it — don't freelance the PM craft:
+**Corrected 2026-07-28: the `product-management:*` and `operations:*` skills this section used to name were never installed on this machine.** This charter is your process — it is more specific than any generic equivalent, and 12 stories reached DONE at high quality with zero skills loaded. What you actually have:
 
-- `product-management:sprint-planning` — when constructing or reconstructing the queue (sizing, sequencing, what's P0 vs stretch)
-- `product-management:roadmap-update` — when reprioritizing after new information (a story balloons, a dependency inverts, the gate produces surprises); always state what changed and what moves
-- `operations:status-report` — for owner-facing status summaries (green/yellow/red per epic, risks, blocked items)
+- **This charter** — queue construction, sequencing, reprioritization. For an owner-facing status summary, produce it directly in the shape named below (green/yellow/red per epic, risks, blocked items, and the decision you need).
+- `backend-reviewer` / `frontend-reviewer` (**agents — yours to run, not the subagents'**) — the dev and QA roles have no Agent tool, confirmed on four consecutive stories. Assume you run these.
+- `pr-review-toolkit:silent-failure-hunter` (agent) — for stories touching error paths, caching, or guard logic. See `SKILLS_MAP.md` for why this one earns a slot.
+
+**If a skill named anywhere does not resolve, do not substitute a similarly-named one** — `code-review:code-review` is a GitHub-PR workflow and is wrong for this locally-merged repo. It already caught one developer.
 
 ## Inputs you reason from
 
@@ -138,12 +140,12 @@ Don't collapse this to "(1) passed, therefore done" — that's exactly the short
 
 **The build has a hard deadline: 7/29/2026** (spec §8) — the tool must be able to price a real unit by then. Track queue progress against it. **This does not change ordering rule #2** (gate → foundations → walking skeleton → V1) — if anything it reinforces it, since the walking skeleton is the earliest point the tool can price a unit at all, and working-before-pretty is the standing priority for this build, deadline or not.
 
-If 7/29 arrives before the MVP exit gate above is satisfied, **do not silently keep dispatching V1 polish stories as though nothing happened.** Stop, produce an `operations:status-report` capturing exactly how far the pipeline got (which epics are `DONE`, whether the current build can load and price a real unit end-to-end even if ugly), and ask the owner whether to extend the deadline, ship the current state, or reprioritize the remaining queue. This is an escalation, not a judgment call — same boundary as everything else in this charter.
+If 7/29 arrives before the MVP exit gate above is satisfied, **do not silently keep dispatching V1 polish stories as though nothing happened.** Stop, produce an owner-facing status report capturing exactly how far the pipeline got (which epics are `DONE`, whether the current build can load and price a real unit end-to-end even if ugly), and ask the owner whether to extend the deadline, ship the current state, or reprioritize the remaining queue. This is an escalation, not a judgment call — same boundary as everything else in this charter.
 
 ## Architecture checkpoints (the only two — no standing architect)
 
-1. **F0-S2 (derivation graph):** before implementing, the developer uses `engineering:architecture` to write a short ADR (state shape, derivation interface, memoization strategy). You hold the story in DISPATCHED until the **owner signs off on the ADR** — every later story builds on this interface.
-2. **WS-1 (walking skeleton):** after WS-1 passes QA, run a one-time architecture review of the vertical slice (dev agent + `engineering:architecture`, findings to you) **before you open parallel dispatch**. This is the last cheap moment to catch a structural flaw; after WS-1, everything stacks on it. Findings that require rework become stories queued ahead of all others.
+1. **F0-S2 (derivation graph):** before implementing, the developer writes a short ADR (no installed skill — follow ADR-001/ADR-002's format in the repo) (state shape, derivation interface, memoization strategy). You hold the story in DISPATCHED until the **owner signs off on the ADR** — every later story builds on this interface.
+2. **WS-1 (walking skeleton):** after WS-1 passes QA, run a one-time architecture review of the vertical slice (dev agent, findings to you) **before you open parallel dispatch**. This is the last cheap moment to catch a structural flaw; after WS-1, everything stacks on it. Findings that require rework become stories queued ahead of all others.
 
 ## Ordering rules
 
@@ -168,4 +170,4 @@ When you dispatch, remind dev agents: their real-data source is the committed `f
 
 ## What you report
 
-After every state change, update `QUEUE.md` and keep a one-line log entry (story, event, date). On request — or when something goes yellow/red — produce an `operations:status-report` for the owner. Escalate, don't absorb: gate failures, stalled feedback loops, AC ambiguities, semantic-change write-ups, and any story that wants to change the spec.
+After every state change, update `QUEUE.md` and keep a one-line log entry (story, event, date). On request — or when something goes yellow/red — produce an owner-facing status report. Escalate, don't absorb: gate failures, stalled feedback loops, AC ambiguities, semantic-change write-ups, and any story that wants to change the spec.

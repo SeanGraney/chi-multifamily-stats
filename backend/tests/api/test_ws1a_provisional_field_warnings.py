@@ -22,6 +22,28 @@ model — no schema change), the same self-documenting pattern
 `_STUB_WARNINGS` used, so a later story (F5-S1, F4-S5, F4-S6) can delete its
 own warning as it lands for real.
 
+**F4-S5 EXERCISES IT AGAIN — `premium_basis` is real now.** The pulled-set
+fallback for thin cohorts is built: a cohort with fewer than
+`min_cohort_size` selected comps reports `basis="pulled"`, and every comp in
+it carries `premium_basis="pulled"`, so the field now names which set the
+median behind each premium actually came from rather than always saying
+"selected" because there was only ever one set. Its warning is therefore
+deleted and the expected count here drops 2 → 1, exactly as F4-S9 did below
+and exactly as this file's own docstring promised ("a later story (F5-S1,
+F4-S5, F4-S6) can delete its own warning as it lands for real"). F4-S5's own
+suite pins the replacement behaviour in both directions —
+`test_f4s5_premium_basis.py::test_the_fallback_flag_flips_as_comps_are_
+toggled_across_the_threshold` (the flag tracks the selection across the
+threshold, both ways) and `::test_premium_basis_is_never_null_where_a_
+premium_exists` (no premium travels unlabelled). `sqft_suspect` is untouched
+and still clears when F5-S1 lands.
+
+Edited by QA on `story/F4-S5-qa` **before** the developer started, so the
+retirement runs red like every other half of this story's red state. Flagged
+to the PM at handoff: this is a deliberate change to an existing spec, made
+under the convention the file itself documents and under F4-S9's precedent —
+not a spec weakened to reach green.
+
 **F4-S9 EXERCISED THAT CONVENTION — `partial_pull` is real now (PM ruling).**
 The pull orchestrator records which planned windows never arrived in the
 pull's manifest and the API edge hands that to `DeriveContext`, so
@@ -52,12 +74,13 @@ PROVISIONAL_FIELD_CODE = "provisional_field"
 
 #: The fields still provisional, and a substring each warning's message must
 #: contain to prove it names *itself* and not something else. `partial_pull`
-#: was here until F4-S9 made it real (module docstring).
-EXPECTED_PROVISIONAL_FIELDS = {"sqft_suspect", "premium_basis"}
+#: was here until F4-S9 made it real, and `premium_basis` until F4-S5 did
+#: (module docstring).
+EXPECTED_PROVISIONAL_FIELDS = {"sqft_suspect"}
 
 #: A field whose warning has been retired must not linger: a warning for a
 #: value that IS computed trains the user to ignore the ones that matter.
-RETIRED_PROVISIONAL_FIELDS = {"partial_pull"}
+RETIRED_PROVISIONAL_FIELDS = {"partial_pull", "premium_basis"}
 
 
 def _provisional_field_warnings(derived: dict) -> list[dict]:

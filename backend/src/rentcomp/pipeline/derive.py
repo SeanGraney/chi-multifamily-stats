@@ -50,6 +50,7 @@ from rentcomp.models.domain import StitchedComp
 from rentcomp.models.requests import DeriveRequest
 from rentcomp.models.responses import (
     Band,
+    Basis,
     Breakdown,
     CohortCount,
     Cut,
@@ -61,7 +62,7 @@ from rentcomp.models.responses import (
 )
 from rentcomp.pipeline.anchor import anchor as anchor_stage
 from rentcomp.pipeline.buckets import bucket_of, bucket_stats
-from rentcomp.pipeline.cohorts import cohort_medians, median_by_year
+from rentcomp.pipeline.cohorts import basis_by_year, cohort_medians, median_by_year
 from rentcomp.pipeline.keys import disambiguate_keys
 from rentcomp.pipeline.membership import classify_membership, distances_mi
 from rentcomp.pipeline.premium import compute_premiums
@@ -99,7 +100,12 @@ DRIFT_SENSITIVITY_PTS = 2.0
 #: `PIPELINE_VERSION` deliberately does **not** enter the cache key (F3-S1,
 #: `test_a_pipeline_version_bump_does_not_change_the_key`), so a release never
 #: evicts a pull the user paid for.
-PIPELINE_VERSION = "0.1.0-f4s8"
+#:
+#: F4-S5 makes the thin-cohort fallback real: a cohort with fewer than
+#: `min_cohort_size` selected comps now takes its median over the pulled set,
+#: so premiums in thin cohorts change value. That is a change in output
+#: numbers, not just in fields, hence the bump.
+PIPELINE_VERSION = "0.1.0-f4s5"
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +159,14 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
 
     cohorts = cohort_medians(keys, psfs, years, weights, included, cfg.min_cohort_size)
     premiums = compute_premiums(psfs, years, median_by_year(cohorts))
+    # F4-S5: a premium's basis is its own cohort's basis, read off the same
+    # `CohortStat` the median came from — so a row can never be labelled with a
+    # provenance its cohort does not have.
+    bases = basis_by_year(cohorts)
+    premium_bases = [
+        None if premium is None else bases[year]
+        for premium, year in zip(premiums, years, strict=True)
+    ]
     comp_buckets = [bucket_of(premium, cfg.bucket_half_width_pct) for premium in premiums]
 
     drift = drift_band(req.drift_pct, DRIFT_SENSITIVITY_PTS)
@@ -177,12 +191,15 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
 
     contributions = contribution_shares(weights, included)
     derived_comps = [
-        _derived_comp(comp, key, psf, premium, bucket, distance, weight, share, state, ctx.as_of)
-        for comp, key, psf, premium, bucket, distance, weight, share, state in zip(
+        _derived_comp(
+            comp, key, psf, premium, basis, bucket, distance, weight, share, state, ctx.as_of
+        )
+        for comp, key, psf, premium, basis, bucket, distance, weight, share, state in zip(
             comps,
             keys,
             psfs,
             premiums,
+            premium_bases,
             comp_buckets,
             distances,
             weights,
@@ -222,6 +239,7 @@ def _derived_comp(
     key: str,
     psf: float | None,
     premium: float | None,
+    premium_basis: Basis | None,
     bucket: str | None,
     distance: float,
     weight: float,
@@ -255,9 +273,7 @@ def _derived_comp(
         initial_ask=comp.initial_ask,
         psf=psf,
         premium=premium,
-        # F4-S5 owns the fallback to the pulled-set median; until then every
-        # premium that exists came from the selected set.
-        premium_basis="selected" if premium is not None else None,
+        premium_basis=premium_basis,
         cohort_year=comp.cohort_year,
         effective_dom=comp.effective_dom,
         censored=comp.censored,
@@ -357,12 +373,18 @@ def _warnings(
 
     The `provisional_field` entries (WS-1a, ADR-002 finding 5) are the same
     self-documenting convention applied to individual FIELDS rather than
-    whole stages: `sqft_suspect` and `premium_basis` are honest defaults for
-    what this pipeline actually computes today, not placeholders standing in
-    for a real number — but nothing signals they are provisional until
-    F5-S1/F4-S5 build the real computation each one is a stand-in for. Each
-    warning is unconditional and each disappears independently as its own
-    story lands.
+    whole stages: `sqft_suspect` is an honest default for what this pipeline
+    actually computes today, not a placeholder standing in for a real number —
+    but nothing signals it is provisional until F5-S1 builds the real
+    computation it is a stand-in for. Each warning is unconditional and each
+    disappears independently as its own story lands.
+
+    **`premium_basis`'s entry is retired here (F4-S5).** It is no longer
+    always `"selected"`: a cohort below `min_cohort_size` falls back to the
+    pulled-set median and every comp in it reports `premium_basis="pulled"`,
+    so the field now names which set the median behind each premium actually
+    came from. A `provisional_field` warning for a value that *is* computed is
+    a false warning, and false warnings are how the real ones stop being read.
 
     **`partial_pull`'s entry is retired here (F4-S9).** It is no longer a
     placeholder: the orchestrator records which planned windows never arrived
@@ -377,13 +399,6 @@ def _warnings(
             message=(
                 "sqft_suspect is always false — the >30% cohort-median $/sqft deviation "
                 "flag (F5-S1) is not built yet."
-            ),
-        ),
-        DerivedWarning(
-            code="provisional_field",
-            message=(
-                "premium_basis is always \"selected\" — the pulled-set fallback for thin "
-                "cohorts (F4-S5) is not built yet."
             ),
         ),
     ]

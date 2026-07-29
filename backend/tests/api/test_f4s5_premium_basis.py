@@ -447,7 +447,19 @@ def test_the_fallback_flag_flips_as_comps_are_toggled_across_the_threshold(f4s5)
     ], f"basis/thin must track the selection across the threshold in both directions: {seen}"
 
 
-def test_every_comps_premium_basis_agrees_with_its_own_cohorts_basis(f4s5) -> None:
+@pytest.mark.parametrize(
+    "weights",
+    [
+        # The MIXED state is the load-bearing one: with 2025 above the minimum
+        # and 2021-2024 below it, a comp-level flag that is really one global
+        # "something fell back" boolean disagrees with its own cohort here and
+        # nowhere else. (Added after a surviving mutant did exactly that — see
+        # the handoff's mutation report.)
+        pytest.param({}, id="mixed-bases"),
+        pytest.param(zero_out(BOUNDARY_2025[4], BOUNDARY_2025[5]), id="all-pulled"),
+    ],
+)
+def test_every_comps_premium_basis_agrees_with_its_own_cohorts_basis(f4s5, weights) -> None:
     """The comp-level flag and the cohort-level flag are one fact.
 
     F8-S3 reads the rail warning off the cohorts; a comp row reads its own
@@ -455,7 +467,7 @@ def test_every_comps_premium_basis_agrees_with_its_own_cohorts_basis(f4s5) -> No
     premium marked "selected" inside a cohort marked "pulled" — a number
     labelled with a provenance it does not have.
     """
-    derived = f4s5(weights=zero_out(BOUNDARY_2025[4], BOUNDARY_2025[5]))
+    derived = f4s5(weights=weights)
     for row in derived["comps"]:
         stat = cohort(derived, row["cohort_year"])
         expected = stat["basis"] if row["premium"] is not None else None

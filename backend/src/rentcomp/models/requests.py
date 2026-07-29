@@ -31,7 +31,15 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["DeriveRequest", "Filters", "SearchRequest", "Subject", "Weight"]
+__all__ = [
+    "DeriveRequest",
+    "Filters",
+    "SearchParams",
+    "SearchRequest",
+    "Subject",
+    "Weight",
+    "WorkspaceState",
+]
 
 #: A curation weight. Non-negative: a negative weight has no meaning in this
 #: system and would silently corrupt every weighted statistic downstream, so
@@ -95,8 +103,8 @@ class DeriveRequest(BaseModel):
     candidate_rent: float | None = Field(default=None, gt=0.0)
 
 
-class SearchRequest(BaseModel):
-    """The subject + comp-net definition a search form submits (F2-S1/F4-S9).
+class SearchParams(BaseModel):
+    """The comp-net definition that produced one pull's evidence (F2-S1/F4-S9).
 
     Deliberately the *pull's* parameters and nothing else: the subject's own
     sqft, the drift assumption and every curation knob belong to
@@ -106,6 +114,12 @@ class SearchRequest(BaseModel):
 
     `extra="forbid"` for the same reason as `DeriveRequest`: a typo'd field
     here would silently widen or narrow a pull that costs real money.
+
+    Split out of `SearchRequest` by F1-S2 because a stored workspace has to
+    carry these values and must *not* carry `force_refresh` — consent to spend
+    money is a property of one request, never of saved state. One declaration
+    of the eight fields, so the params a workspace remembers and the params a
+    search submits cannot drift apart.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -127,6 +141,39 @@ class SearchRequest(BaseModel):
     #: `"MM-DD"`. The seasonal window, identical in every cohort year.
     window_start: str
     window_end: str
+
+
+class SearchRequest(SearchParams):
+    """What a search form submits: the pull's params plus the consent flag.
+
+    `force_refresh` lives here and nowhere else. It is the user's decision, in
+    one moment, to re-spend on evidence already on disk — never a property of
+    anything persisted, which is why `SearchParams` (what a workspace stores)
+    stops one field short of it.
+    """
+
     #: The user's explicit consent to re-spend on evidence already on disk —
     #: set only by the REFRESH click in F3-S2's cache modal.
     force_refresh: bool = False
+
+
+class WorkspaceState(DeriveRequest):
+    """The body of `PUT /api/workspaces/{key}` — one saved workspace (F1-S2).
+
+    Literally `DeriveRequest` plus the search that produced the evidence it
+    curates. Inheritance rather than a parallel model on purpose: "restored
+    exactly as last left" means the thing that comes back out of the store is
+    the thing `POST /api/derive` takes, so a field that exists on one and not
+    the other is a field the user can lose.
+
+    **Why `search` has to be here at all.** F1-S1's recents table renders
+    address / specs / radius per row, and none of those is recoverable from
+    anything else on disk: the cache key is a one-way SHA256 of the search
+    params (F3-S1) and the manifest holds only `as_of`, the window and the
+    per-query record. So the workspace stores them at save time or they are
+    gone. Optional, because a client that has not got them (or does not care)
+    must still be able to save curation — losing a table column is not a
+    reason to lose the user's work.
+    """
+
+    search: SearchParams | None = None

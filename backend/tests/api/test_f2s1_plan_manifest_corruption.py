@@ -15,14 +15,17 @@ WHAT THIS ROUTE PROMISES ABOUT A BROKEN CACHE FILE
     whole form down over an unreadable cache file would be a worse answer than
     "this looks like it needs a pull".
 
-That is the right design call, and it is the one this file pins. It is also, as
-shipped, **not what the code does for every shape** — `except (OSError,
-ValueError, KeyError)` does not catch the `AttributeError` and `TypeError` that
-`storage/cache.py::read_manifest` raises when the manifest's *types* are wrong
-rather than its values. Those shapes are marked `xfail` below (non-strict, so
-the follow-up fix turns them green without a test edit) rather than asserted
-against today's behaviour — pinning a 500 that the module's own docstring
-disowns would cement the defect instead of recording it.
+That is the right design call, and it is the one this file pins.
+
+*(As first written this file carried five non-strict `xfail`s: as shipped,
+`except (OSError, ValueError, KeyError)` did not catch the `AttributeError` and
+`TypeError` that `storage/cache.py::read_manifest` raises when the manifest's
+*types* are wrong rather than its values, so those five shapes 500ed. The
+follow-up widened both `except` clauses to the shared
+`storage.cache.CORRUPT_MANIFEST_ERRORS`, and the markers are now gone: all nine
+shapes are asserted the same way, unconditionally. Retired rather than left to
+XPASS silently, because a non-strict `xfail` that passes is a comment claiming a
+defect that no longer exists.)*
 
 WHY IT MATTERS MORE THAN THE EXCEPTION LIST SUGGESTS
 ------------------------------------------------------
@@ -105,7 +108,7 @@ CORRUPTIONS: dict[str, str] = {
     "truncated to nothing": "",
     "no as_of": json.dumps({"window": ["01-01", "12-31"]}),
     "as_of is not a date": json.dumps({"as_of": "someday", "window": ["01-01", "12-31"]}),
-    # --- type-shaped breakage: escapes `_cache_status` today ----------------
+    # --- type-shaped breakage: escaped `_cache_status` before the follow-up --
     # `payload["as_of"]` on a non-mapping -> TypeError
     "json but not an object": "null",
     "json is a list": "[]",
@@ -122,18 +125,6 @@ CORRUPTIONS: dict[str, str] = {
     "planned is not a number": json.dumps(
         {"as_of": "2026-07-27", "window": ["01-01", "12-31"], "planned": [1]}
     ),
-}
-
-#: Shapes whose 500 is the defect this file reports rather than pins. Non-strict
-#: `xfail`: when the follow-up widens `_cache_status`'s `except` clause these
-#: turn XPASS (green run, visible in the summary) instead of demanding an edit
-#: in the same commit as the fix.
-UNHANDLED_TODAY = {
-    "json but not an object",
-    "json is a list",
-    "queries are not records",
-    "window is not a sequence",
-    "planned is not a number",
 }
 
 
@@ -260,26 +251,7 @@ def test_previewing_over_a_corrupt_manifest_spends_nothing(corrupted, http, shap
 # ===========================================================================
 
 
-@pytest.mark.parametrize(
-    "shape",
-    [
-        pytest.param(
-            shape,
-            marks=pytest.mark.xfail(
-                reason=(
-                    "api/plan.py::_cache_status catches (OSError, ValueError, KeyError) "
-                    "but read_manifest raises AttributeError/TypeError for type-shaped "
-                    "corruption. Non-strict: turns XPASS when the follow-up widens the "
-                    "clause. Same gap as api/search.py:92."
-                ),
-                strict=False,
-            ),
-        )
-        if shape in UNHANDLED_TODAY
-        else shape
-        for shape in sorted(CORRUPTIONS)
-    ],
-)
+@pytest.mark.parametrize("shape", sorted(CORRUPTIONS))
 def test_a_corrupt_manifest_previews_as_a_miss_instead_of_500ing_the_form(
     corrupted, http, shape
 ) -> None:
@@ -292,6 +264,11 @@ def test_a_corrupt_manifest_previews_as_a_miss_instead_of_500ing_the_form(
     A 500 here is one 500 per keystroke behind a debounced preview, and it also
     costs the user F2 step 4: the form cannot route to F3's cache modal when it
     could not learn whether a cache exists.
+
+    Ordinary assertions for all nine shapes. Five of them were non-strict
+    `xfail`s when this file was written and the docstring above was aspirational
+    for those; the `except` clause was widened to match it, so the promise is now
+    kept for every shape and there is nothing left to except.
     """
     corrupted(shape)
     response = http.post(PLAN_PATH, json=SEARCH_BODY)

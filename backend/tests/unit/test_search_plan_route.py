@@ -26,8 +26,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC = REPO_ROOT / "backend" / "src" / "rentcomp"
 PLAN_MODULE = SRC / "api" / "plan.py"
@@ -53,10 +51,23 @@ FORBIDDEN_NAMES = frozenset(
 #: Modules that either dial out or are only ever imported in order to.
 FORBIDDEN_MODULES = frozenset({"httpx", "socket", "urllib", "urllib.request", "requests"})
 
-needs_plan_module = pytest.mark.skipif(
-    not PLAN_MODULE.is_file(),
-    reason="backend/src/rentcomp/api/plan.py not implemented yet (F2-S3 red)",
-)
+def test_the_module_these_guarantees_are_about_is_where_this_file_expects_it() -> None:
+    """The loud precondition for the two [MONEY] tests below.
+
+    Both of them used to hang off `pytest.mark.skipif(not PLAN_MODULE.is_file())`
+    — written while F2-S3 was red, harmless the day it went green, and a trap
+    afterwards: rename or move `api/plan.py` and both skip, the suite still
+    exits 0, and the "cannot spend" guarantee is gone with nothing red to say
+    so. WORKFLOW.md §2 is explicit that a skip which exits 0 is
+    indistinguishable from a pass, so the precondition fails instead of
+    excusing itself.
+    """
+    assert PLAN_MODULE.is_file(), (
+        f"{PLAN_MODULE} does not exist. The two tests below hold F2-S3's [MONEY] "
+        '"cannot spend" guarantee as a property of that file\'s imports — a property no '
+        "HTTP assertion can reach. If the preview route moved, point PLAN_MODULE at its "
+        "new home; do not let this file go quiet."
+    )
 
 
 def _module_tree() -> ast.Module:
@@ -83,7 +94,6 @@ def _bound_import_names(tree: ast.Module) -> dict[str, str]:
     return bound
 
 
-@needs_plan_module
 def test_the_preview_route_cannot_reach_anything_that_spends_money() -> None:
     """The PM's "structurally incapable of spending", as a property of imports.
 
@@ -111,7 +121,6 @@ def test_the_preview_route_cannot_reach_anything_that_spends_money() -> None:
     )
 
 
-@needs_plan_module
 def test_no_second_implementation_of_what_a_pull_costs_exists() -> None:
     """F2-S3 [INVARIANT]: one function, two consumers, no drift.
 

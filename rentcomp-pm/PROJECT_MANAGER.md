@@ -152,10 +152,74 @@ If 7/29 arrives before the MVP exit gate above is satisfied, **do not silently k
 1. **The gate is absolute:** `T-S3` (go/no-go, live API verification) precedes everything. If it fails, halt the queue and escalate — the fallback is redesign, not sprint 1.
 2. **Macro-order from spec §9:** gate → F0 foundations → walking skeleton (vertical slice: minimal F4-S1..S5 + minimal anchor + minimal price test, ugly) → remaining V1.
 3. **Dependencies from QUEUE.md's `blockedBy` column** — maintained by you as ground truth.
-4. **Parallelism is limited by file coupling, not agent availability.** Most stories touch the shared derivation graph (F0-S2). Run parallel stories only from different lanes (see QUEUE.md lanes) with low file overlap — e.g., an F4 pipeline story alongside an F6 map story is safe; two F4 stories in flight is not. When in doubt, serialize: merge conflicts cost more than idle agents.
+4. **Parallelism is limited by file coupling, not agent availability.** Most stories touch the shared derivation graph (F0-S2). Run parallel stories only from different lanes (see QUEUE.md lanes) with low file overlap — e.g., an F4 pipeline story alongside an F6 map story is safe; two F4 stories in flight is not. When in doubt, serialize: merge conflicts cost more than idle agents. **See "Running agents in parallel" below for the operational rules — this ordering rule tells you *which stories* may run together; that section tells you *how to run them without them colliding*.**
 5. **Tests ride with stories:** T-S4 Playwright specs are not queued separately — each story's QA work includes its flow spec. T-S1 golden files ride with F4-S3. Only T-S2 (invariant suite) and the final full-regression pass are standalone queue items.
 6. **Priority within READY set:** unblocks-the-most-stories first; tie-break toward the pipeline lane (it's the product).
 7. **You steward the API budget (50 calls/month).** The ledger lives at the top of QUEUE.md. The gate spends ≤10; everything after runs in fixture mode on the gate's saved responses (WORKFLOW.md §6). No agent gets live-mode authorization without owner sign-off, and every live call is ledgered before it happens.
+
+## Running agents in parallel — the operational rules
+
+Ordering rule #4 tells you **which stories** may run together. This tells you
+**how to run them without them colliding**. Every rule here was bought with an
+incident; none of it is theory.
+
+**The unit of contention is a file, not a lane.** Lanes are a cheap proxy and
+they are not the rule. The rule is:
+
+- **QA phases fan out freely.** They write tests and touch nothing another agent
+  owns. Three or four concurrently is normal.
+- **Developers serialize by shared file.** `pipeline/` and `storage/pulls.py` are
+  the two paths this project actually contends on. Two devs in `pipeline/` is a
+  merge conflict you scheduled yourself.
+- **A dev is released by the *merge* of the story it shares files with, not by
+  that story's dev finishing.** F4-S8's dev waited for F4-S4 to land on main.
+
+**Every parallel dispatch gets its own worktree — created by you, at dispatch
+time, and named in the dispatch text.** Do not tell an agent to work in an
+existing worktree, and do not rely on a worktree you verified a moment ago:
+
+> INCIDENT #6 (2026-07-29). Three agents ended up in one tree. Two QA agents'
+> commits interleaved on one branch; a third agent had its checkout switched
+> **mid-read** — one file read fine, the next did not exist a second later.
+> **The dispatch said "the branch is already checked out and clean", which was
+> true when written and false when read.** All three agents independently
+> declined to fight for the tree and reported it unprompted, which is the only
+> reason nothing was lost. INCIDENT #1's serialization ruling covered *devs*;
+> this proved **a QA agent creating a branch is a tree-touching act too.**
+
+**Do not merge to main while a QA verify is running.** F1-S2's verify ran
+`git diff main HEAD` mid-run and saw another story's tests apparently missing —
+it reads exactly like a merge that dropped work, and it very nearly went into a
+report as a catastrophic finding. It was main moving underneath. Hold the merge,
+or tell the agent explicitly that main will move and what landed.
+
+**Every dispatch carries `WORKFLOW.md` §2's junction-free doors** — not only the
+ones you expect to touch E2E. Your expectation about which legs a story needs is
+exactly the thing that turns out to be wrong: a frontend-only row was dispatched
+without them, genuinely needed Playwright, and the agent reached for a directory
+junction — the tool that destroyed the shared `.venv` in INCIDENT #5.
+
+**Port 8000 contention is created by your parallelism, so it is yours to
+manage.** Caught three times, most recently by an agent whose Playwright run
+passed against *another agent's server* while `netstat` had shown the port free
+ninety seconds earlier. **Require every browser-leg dispatch to prove the server
+it reached is its own — by a behaviour only its change produces, never a status
+code or a guessable version string.** Prove it *after* the run as well as before.
+
+**Prefer resuming an agent by name over spawning a fresh one.** Its context is
+restored intact — it remembers its own reasoning, its mutation harnesses, and
+what it already ruled out. A verify phase resumed into the agent that wrote the
+tests is markedly better than a cold one.
+
+**When an agent dies, inspect its worktree read-only before deciding anything.**
+Twice now the work was real and worth keeping, and a reflexive re-dispatch would
+have destroyed it. **Commit it verbatim, labelled NOT-reviewed and NOT-verified,
+and let the resuming agent judge it** — that labelling is what makes the next
+agent actually look, and on F1-S2 it is why a live defect in the preserved code
+was found rather than inherited.
+
+**Put "commit early and often" in every dispatch.** Agents dying with
+uncommitted work is the only thing that has actually cost this project time.
 
 ## RentCast MCP — control the live-fire trigger
 

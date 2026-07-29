@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { components } from "../api/schema";
 import { useDerive, type DeriveStatus } from "../api/useDerive";
 
@@ -98,27 +98,19 @@ export default function Results() {
   const selectAll = () => setWeightForAll(INCLUDED_WEIGHT, (comp) => comp.psf !== null);
   const selectNone = () => setWeightForAll(0, () => true);
 
-  if (error && !derived) {
-    return (
-      <section className="p-6">
-        <h1 className="text-amber text-xl">Results</h1>
-        <p className="mt-2 text-sm text-rust">Derive failed: {error}</p>
-      </section>
-    );
-  }
-
+  // Before the first payload there is nothing to render but the reason why.
   if (!derived) {
     return (
-      <section className="p-6">
-        <h1 className="text-amber text-xl">Results</h1>
-        <p className="mt-2 text-sm text-grey">Deriving...</p>
-      </section>
+      <ResultsShell>
+        <p className={error ? "mt-2 text-sm text-rust" : "mt-2 text-sm text-grey"}>
+          {error ? `Derive failed: ${error}` : "Deriving..."}
+        </p>
+      </ResultsShell>
     );
   }
 
   return (
-    <section className="p-6">
-      <h1 className="text-amber text-xl">Results</h1>
+    <ResultsShell>
       <p className="mt-1 text-xs text-grey">
         {derived.meta.pull_ref} · as of {derived.meta.as_of} · {derived.breakdown.pulled} comps
         pulled
@@ -136,6 +128,15 @@ export default function Results() {
       />
       <BucketTable buckets={derived.buckets} />
       <PriceTestPanel priceTest={derived.price_test} />
+    </ResultsShell>
+  );
+}
+
+function ResultsShell({ children }: { children: ReactNode }) {
+  return (
+    <section className="p-6">
+      <h1 className="text-amber text-xl">Results</h1>
+      {children}
     </section>
   );
 }

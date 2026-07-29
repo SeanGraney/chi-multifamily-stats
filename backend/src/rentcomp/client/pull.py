@@ -53,8 +53,41 @@ RESUME GRANULARITY (a logged [DEFAULT])
 ----------------------------------------
 A query is satisfied when its whole result arrived; the resume diff is
 per-query. Page-level resume (re-entering a truncated query at its last offset)
-is F3-S4's, and buys nothing here: no committed fixture and no live pull in
-this product's plan has yet needed more than one page per window.
+is out of scope by PM ruling (queue row 13c) and buys nothing here: no
+committed fixture and no live pull in this product's plan has yet needed more
+than one page per window.
+
+F3-S4 — WHAT THE RESUME DIFF IS ACTUALLY JUDGED ON
+---------------------------------------------------
+**The bytes are the truth; the manifest is an index over them.** Every earlier
+version of this module trusted the manifest alone, which cost money in one
+direction and honesty in the other:
+
+* a manifest it could not read meant "nothing is satisfied", so a broken
+  *index* re-bought four responses that were sitting untouched in `raw/` — on
+  the live path, 4 of the owner's 50 calls to work around a file they could
+  have deleted for free; and
+* a `satisfied` flag outlived the file it described, so a pull reported itself
+  whole over evidence that was gone and every downstream number was quietly
+  short a cohort.
+
+So `_reconcile` corroborates the index against the store, in one direction
+each way: **disk demotes** a recorded satisfaction with no usable bytes behind
+it, and **disk promotes** a window the index says nothing about (there is no
+record, or no readable manifest at all). A record that says a window *failed*
+is real information the bytes cannot contradict — it stays failed, and stays
+owed.
+
+`as_of` ADVANCES ONLY WHEN BYTES ACTUALLY ARRIVE (PM ruling, F3-S4)
+--------------------------------------------------------------------
+`as_of` is "when this evidence was observed", and it is the pipeline's only
+"now": a censored comp's `effective_dom` is `as_of − listed`. Restamping it on
+an attempt that fetched nothing therefore adds vacancy to comps nobody
+re-observed — the same disk yielding different numbers across a restart. The
+signal is a **write actually happening** (`_fetch_one` reports whether any
+response reached the store), never "the set of held signatures grew": a forced
+refresh overwrites the same files, so a set comparison would freeze `as_of`
+forever and break the honest case instead.
 """
 
 from __future__ import annotations
@@ -71,12 +104,19 @@ from rentcomp.client.rentcast import (
     MissingApiKeyError,
     RentCastClient,
     RentCastError,
+    ResponseUnusableError,
     resolve_mode,
 )
 from rentcomp.storage.cache import (
+    CORRUPT_MANIFEST_ERRORS,
+    CacheMissError,
+    Manifest,
     QueryStatus,
     cache_key,
+    raw_response_paths,
     read_manifest,
+    read_raw_meta,
+    read_raw_records,
     write_manifest,
     write_raw_response,
 )
@@ -235,18 +275,23 @@ def run_pull(
     )
     window = (window_start_mmdd, window_end_mmdd)
 
-    recorded = _known_queries(key)
-    known = {} if force_refresh or recorded is None else dict(recorded)
-    owed = [query for query in fetchable if not _is_satisfied(known.get(_sig(query)))]
+    recorded = _read_manifest_or_none(key)
+    known = {} if force_refresh else _reconcile(key, fetchable, recorded)
+    owed = [query for query in fetchable if _is_owed(known.get(_sig(query)))]
+
+    # The date this entry's evidence was observed, carried forward from what is
+    # already on disk. Only a response actually arriving below moves it.
+    as_of = _held_as_of(key, recorded, today)
 
     if not owed:
         if recorded is None:
-            # A plan with NOTHING fetchable — every window lies in the future
-            # (F4-S1 AC4) — still gets an entry, so the search is represented
-            # as "planned, cost nothing, found nothing" rather than as a pull
-            # that does not exist. The alternative reads downstream as a
-            # missing cache entry, which is a different fact.
-            _write_manifest(key, today, window, plan, fetchable, known)
+            # Two cases, one answer. (a) A plan with NOTHING fetchable — every
+            # window lies in the future (F4-S1 AC4) — still gets an entry, so
+            # the search reads as "planned, cost nothing, found nothing"
+            # rather than as a pull that does not exist. (b) The manifest was
+            # lost or corrupted while its responses survived: rebuilding the
+            # index from the store is the repair, and it costs nothing.
+            _write_manifest(key, as_of, window, plan, fetchable, known)
         # Otherwise nothing to buy and nothing to write: report what is already
         # on disk rather than restamping a manifest with a fetch that did not
         # happen.
@@ -260,11 +305,17 @@ def run_pull(
         spent_before = _require_budget(len(owed))
 
     for query in owed:
-        known[_sig(query)] = _fetch_one(key, query, today, transport)
+        status, arrived = _fetch_one(key, query, today, transport)
+        known[_sig(query)] = status
+        if arrived:
+            # A response reached the store, so this pull really did observe the
+            # market today. Nothing else moves `as_of` — see the module
+            # docstring for why a failed attempt must not.
+            as_of = today
         # Written after every query, not once at the end: a crash mid-pull must
         # leave a manifest that still explains what is on disk, or the retry
         # re-buys responses that were already paid for (D24).
-        _write_manifest(key, today, window, plan, fetchable, known)
+        _write_manifest(key, as_of, window, plan, fetchable, known)
 
     calls_spent = (load_ledger().calls_this_month - spent_before) if mode is Mode.LIVE else 0
     return _outcome_from(
@@ -280,17 +331,55 @@ def pull_status(pull_ref: str) -> PullOutcome:
     who reopens a workspace tomorrow still be told "2025 inactive missing · 1
     call to complete".
 
+    **Judged on the responses, not only on the flags that index them** (F3-S4).
+    `POST /api/search` answers `complete` from here and `POST /api/derive`
+    answers from the bytes; when a crash separates the two, a manifest whose
+    `satisfied` flags outlive their files tells the user the evidence is whole
+    and then shows them less of it than they paid for, with every downstream
+    number short a cohort and nothing on screen to say so. Corroborating here
+    costs a `stat` and a parse per response on a route that already refuses to
+    fetch.
+
     Raises `CacheMissError` when there is no such pull.
     """
     manifest = read_manifest(pull_ref)
-    return PullOutcome(
-        pull_ref=pull_ref,
+    held = _held_signatures(pull_ref)
+    corroborated = Manifest(
+        as_of=manifest.as_of,
+        window=manifest.window,
         planned=manifest.planned,
         fetchable=manifest.fetchable,
+        queries=tuple(_corroborate(query, held) for query in manifest.queries),
+    )
+    return PullOutcome(
+        pull_ref=pull_ref,
+        planned=corroborated.planned,
+        fetchable=corroborated.fetchable,
         calls_spent=0,
-        complete=manifest.complete,
-        missing=manifest.missing,
-        calls_to_complete=manifest.calls_to_complete,
+        complete=corroborated.complete,
+        missing=corroborated.missing,
+        calls_to_complete=corroborated.calls_to_complete,
+    )
+
+
+def _corroborate(status: QueryStatus, held: set[str]) -> QueryStatus:
+    """A recorded window's status, checked against the bytes behind it.
+
+    One direction only: a claimed satisfaction with no usable response left on
+    disk is demoted to an open window. A recorded *failure* is never promoted
+    here — that would need the plan to know a signature was even expected, and
+    `_reconcile` (which has it) is where that judgement is made.
+    """
+    if not status.satisfied or status.sig in held:
+        return status
+    return QueryStatus(
+        label=status.label,
+        sig=status.sig,
+        satisfied=False,
+        error=(
+            "the response that answered this window is no longer readable on disk, so "
+            "the window is open again"
+        ),
     )
 
 
@@ -304,13 +393,20 @@ def _fetch_one(
     query: PlannedQuery,
     today: date,
     transport: httpx.BaseTransport | None,
-) -> QueryStatus:
+) -> tuple[QueryStatus, bool]:
     """Fetch one planned window, keeping every response byte it costs.
 
-    A failure is returned, never raised: §5a's "incomplete first pull → usable,
-    with the gap named loudly". Raising here would throw away the windows that
-    did arrive — and on the live path, throw away calls that were already paid
-    for.
+    Returns `(status, arrived)`, where `arrived` is True when at least one
+    response body reached the store during this call — the ONE signal that
+    moves the manifest's `as_of` (see the module docstring). It is reported
+    from the writer's own answer rather than inferred from a file listing,
+    because a forced refresh rewrites the same filenames and would be
+    invisible to any comparison of what is held.
+
+    A failure is returned, never raised: §5a's "incomplete first pull →
+    usable, with the gap named loudly". Raising here would throw away the
+    windows that did arrive — and on the live path, throw away calls that were
+    already paid for.
     """
     base = _sig(query)
     persisted: set[int] = set()
@@ -319,14 +415,46 @@ def _fetch_one(
         """D24 write-through. Called by `RentCastClient` per call, with the
         body exactly as it arrived, BEFORE anything parses it."""
         offset = _offset_of(meta)
-        write_raw_response(key, _page_sig(base, offset), raw, meta=meta)
-        persisted.add(offset)
+        if write_raw_response(key, _page_sig(base, offset), raw, meta=_meta(meta, today)):
+            persisted.add(offset)
 
     client = RentCastClient(transport=transport, sink=sink)
     try:
         result = client.fetch_listings(query.params)
+    except ResponseUnusableError as exc:
+        # A 2xx that arrived, was billed, and is filed (the sink runs before
+        # anything parses) — and that this parser cannot read. Not satisfied:
+        # its evidence is unusable, so `missing` must keep naming it. Not
+        # owed either: another call returns the same bytes, and D24's whole
+        # point is that a parsing bug or a schema surprise costs nothing.
+        if persisted:
+            return (
+                QueryStatus(
+                    label=_label(query),
+                    sig=base,
+                    satisfied=False,
+                    owed=False,
+                    error=(
+                        f"the response arrived and could not be read: {exc}. It is filed "
+                        "under this pull; re-fetching would return the same bytes, so no "
+                        "call is owed for it."
+                    ),
+                ),
+                True,
+            )
+        # Fixture mode: nothing reached the sink, so there is nothing on disk
+        # and the window is owed like any other failure.
+        return _failed(query, base, exc), False
     except RentCastError as exc:
-        return QueryStatus(label=_label(query), sig=base, satisfied=False, error=str(exc))
+        # The call delivered nothing (non-2xx, transport failure, no fixture,
+        # budget). A retry might; the window stays owed.
+        return _failed(query, base, exc), bool(persisted)
+    except OSError as exc:
+        # The store refused the bytes (a directory in the way, a full disk, a
+        # permission). One window's storage failure must not lose the windows
+        # already filed under this ref, so it is reported like any other gap
+        # rather than unwinding the whole pull.
+        return _failed(query, base, exc), bool(persisted)
 
     # Fixture mode never reaches the sink (`_fetch_from_fixtures` returns
     # without emitting), so its pages are written here instead. Keyed on the
@@ -335,30 +463,58 @@ def _fetch_one(
     for page in result.pages:
         if page.offset in persisted:
             continue
-        write_raw_response(
+        written = write_raw_response(
             key,
             _page_sig(base, page.offset),
             page.raw,
-            meta={
-                "sig": base,
-                "offset": page.offset,
-                "total_count": page.total_count,
-                "fetched_at": today.isoformat(),
-            },
+            meta=_meta(
+                {
+                    "sig": base,
+                    "offset": page.offset,
+                    "total_count": page.total_count,
+                    "fetched_at": today.isoformat(),
+                },
+                today,
+            ),
         )
+        if written:
+            persisted.add(page.offset)
 
     if result.complete:
-        return QueryStatus(label=_label(query), sig=base, satisfied=True)
-    return QueryStatus(
-        label=_label(query),
-        sig=base,
-        satisfied=False,
-        error=(
-            f"the response was truncated: {result.fetched} of "
-            f"{result.total_count if result.total_count is not None else 'an unknown number of'} "
-            "records arrived"
+        return QueryStatus(label=_label(query), sig=base, satisfied=True), bool(persisted)
+    return (
+        QueryStatus(
+            label=_label(query),
+            sig=base,
+            satisfied=False,
+            error=(
+                f"the response was truncated: {result.fetched} of "
+                f"{result.total_count if result.total_count is not None else 'an unknown number of'} "
+                "records arrived"
+            ),
         ),
+        bool(persisted),
     )
+
+
+def _failed(query: PlannedQuery, base: str, exc: Exception) -> QueryStatus:
+    """A window that did not arrive, recorded with the reason §5a asks for.
+
+    The reason is the exception's own message, so a 429 ("wait") and a 500
+    ("retry") stay the different instructions they are.
+    """
+    return QueryStatus(label=_label(query), sig=base, satisfied=False, error=str(exc))
+
+
+def _meta(meta: dict, today: date) -> dict:
+    """The sidecar this pull files beside a response.
+
+    `as_of` is added on top of whatever the client reported: the client stamps
+    `fetched_at` from the wall clock, while this pull's "now" is the `today`
+    it was given (see the module docstring), and the manifest's `as_of` has to
+    be rebuildable from these sidecars alone after a crash loses the manifest.
+    """
+    return {**meta, "as_of": today.isoformat()}
 
 
 # ---------------------------------------------------------------------------
@@ -407,30 +563,120 @@ def _require_budget(required: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _known_queries(key: str) -> dict[str, QueryStatus] | None:
-    """What the manifest already remembers about this pull's queries.
+def _read_manifest_or_none(key: str) -> Manifest | None:
+    """The manifest at `key`, or `None` when there is no readable one.
 
-    `None` distinguishes "no entry at all" from "an entry that records
-    nothing" — the two differ for a plan with no fetchable window, where the
-    first still needs a manifest written and the second already has one.
+    `None` covers both "no entry yet" and "an entry this version cannot read".
+    They are the same fact for every caller here — the index tells us nothing —
+    and the difference that used to matter (whether to write a manifest in the
+    nothing-owed branch) resolves the same way for both: write one.
+
+    `CORRUPT_MANIFEST_ERRORS` is imported rather than re-spelled. This is the
+    sixth call site in that family on this project, and the previous five drifted
+    apart one `except` clause at a time: `(LookupError, OSError, ValueError)`
+    here caught three of the five types `storage/cache.py` names, so a manifest
+    whose *types* are wrong (`window: 5` → `TypeError`, a `queries` list of
+    non-records → `AttributeError`) walked straight out of `run_pull` and
+    reached every caller as an anonymous 500. One name, so the next shape is
+    added once.
     """
     try:
-        manifest = read_manifest(key)
-    except (LookupError, OSError, ValueError):
-        # No entry yet, or one this version cannot read: either way nothing is
-        # known to be satisfied, which is the safe direction (re-fetching is
-        # recoverable; skipping a window silently is not).
+        return read_manifest(key)
+    except (CacheMissError, *CORRUPT_MANIFEST_ERRORS):
         return None
-    return {query.sig: query for query in manifest.queries}
 
 
-def _is_satisfied(status: QueryStatus | None) -> bool:
-    return status is not None and status.satisfied
+def _reconcile(
+    key: str,
+    fetchable: list[PlannedQuery],
+    recorded: Manifest | None,
+) -> dict[str, QueryStatus]:
+    """What this pull already holds — the index, corroborated by the store.
+
+    See the module docstring for the rule. In one sentence: **disk demotes a
+    claimed satisfaction it cannot back, disk promotes a window the index is
+    silent about, and a recorded failure stands.**
+    """
+    held = _held_signatures(key)
+    index = {query.sig: query for query in (recorded.queries if recorded else ())}
+
+    known: dict[str, QueryStatus] = {}
+    for query in fetchable:
+        sig = _sig(query)
+        status = index.get(sig)
+        if status is None:
+            # The manifest is unreadable, or readable and silent about this
+            # window. Bytes filed under it were paid for; re-buying them to
+            # rebuild an index is the double-pay D24 forbids.
+            if sig in held:
+                known[sig] = QueryStatus(label=_label(query), sig=sig, satisfied=True)
+            continue
+        known[sig] = _corroborate(status, held)
+    return known
+
+
+def _held_signatures(key: str) -> set[str]:
+    """Query signatures with at least one USABLE response filed under `key`.
+
+    Usable, not merely present: a file truncated by a crash, emptied, or
+    standing as a directory is present and is not evidence — and a pull that
+    counted it would report itself whole over bytes nothing can be derived
+    from. `read_raw_records` draws that line in one place, so what this
+    function calls held and what `storage/pulls.py` can actually shape are the
+    same set.
+    """
+    held: set[str] = set()
+    for path in raw_response_paths(key):
+        if read_raw_records(path) is not None:
+            held.add(_query_sig_of(path.stem))
+    return held
+
+
+def _held_as_of(key: str, recorded: Manifest | None, today: date) -> date:
+    """The day this entry's evidence was observed, before this run adds to it.
+
+    From the manifest when there is one. When there is not — a crash lost it,
+    and its responses did not — from the `as_of` each response's sidecar was
+    filed with, so the repair does not stamp its own day on comps nobody
+    re-observed. Never later than `today`: a pull cannot have observed the
+    market after the date it was given.
+    """
+    if recorded is not None:
+        return min(recorded.as_of, today)
+
+    dates = [
+        parsed
+        for path in raw_response_paths(key)
+        if (parsed := _sidecar_as_of(read_raw_meta(path))) is not None
+    ]
+    return min(max(dates), today) if dates else today
+
+
+def _sidecar_as_of(meta: dict) -> date | None:
+    """`as_of` out of one response's sidecar, falling back to `fetched_at`.
+
+    `fetched_at` is the fallback for sidecars written before F3-S4 added
+    `as_of`; it is the wall clock rather than the pull's `today`, which is why
+    it is second and why `_held_as_of` clamps the result.
+    """
+    for field in ("as_of", "fetched_at"):
+        value = meta.get(field)
+        if isinstance(value, str):
+            try:
+                return date.fromisoformat(value[:10])
+            except ValueError:
+                continue
+    return None
+
+
+def _is_owed(status: QueryStatus | None) -> bool:
+    """Should completing this pull send a call for this window?"""
+    return status is None or status.is_owed
 
 
 def _write_manifest(
     key: str,
-    today: date,
+    as_of: date,
     window: tuple[str, str],
     plan: list[PlannedQuery],
     fetchable: list[PlannedQuery],
@@ -445,7 +691,7 @@ def _write_manifest(
     """
     write_manifest(
         key,
-        as_of=today,
+        as_of=as_of,
         window=window,
         planned=len(plan),
         fetchable=len(fetchable),
@@ -503,7 +749,22 @@ def _page_sig(base: str, offset: int) -> str:
     destroy a response that was paid for while every count downstream still
     looked plausible.
     """
-    return f"{base}-off{offset:03d}"
+    return f"{base}{_PAGE_MARKER}{offset:03d}"
+
+
+#: The separator `_page_sig` puts between a query's signature and its page
+#: offset. Named once so the two halves of the convention cannot drift.
+_PAGE_MARKER = "-off"
+
+
+def _query_sig_of(stem: str) -> str:
+    """The query a stored response belongs to — `_page_sig` read backwards.
+
+    `y2025-inactive-off000` → `y2025-inactive`. A filename that predates the
+    convention (or comes from another writer) maps to itself, which is
+    harmless: it simply matches no planned query and holds nothing back.
+    """
+    return stem.rsplit(_PAGE_MARKER, 1)[0]
 
 
 def _label(query: PlannedQuery) -> str:

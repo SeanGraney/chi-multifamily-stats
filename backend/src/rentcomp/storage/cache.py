@@ -76,6 +76,7 @@ __all__ = [
     "read_raw_meta",
     "read_raw_records",
     "records_from_raw",
+    "records_in",
     "write_manifest",
     "write_raw_response",
 ]
@@ -386,28 +387,45 @@ def manifest_fingerprint(key: str) -> str:
     return sha256(body).hexdigest()[:16]
 
 
-def records_from_raw(blob: bytes) -> list[dict] | None:
-    """The listing records inside one stored raw response body, or `None`.
+def records_in(payload: object) -> list[dict] | None:
+    """The listing records inside an already-parsed response body, or `None`.
 
-    `None` means "these bytes are not usable evidence" — truncated, empty, or
-    a 2xx body in a shape this parser does not recognise. That is a different
-    fact from "the response was an empty market" (`b"[]"` → `[]`), and the two
-    must never collapse into each other: one is a gap, the other is an answer.
+    **THE project's single definition of "what a RentCast listings response
+    is"**: a bare JSON array, or `{"listings": [...]}`. `client.rentcast`
+    imports this rather than keeping its own copy, so the live path and the
+    disk path cannot disagree about whether a given body is evidence.
 
-    Mirrors `client.rentcast._extract_records`' notion of what a response is
-    (a bare array, or `{"listings": [...]}`) but returns rather than raises,
-    because every caller here is asking a question about disk state rather
-    than handling a live response.
+    They used to, and the divergence was unbounded spend. `_extract_records`
+    read an unrecognised envelope — `{"data": [...]}`, the canonical shape of
+    a RentCast schema change — as `[]`, a valid empty answer, so the window was
+    filed `satisfied`. This function read the same bytes as unusable, so every
+    later run re-opened the window and bought it again. Neither side was
+    obviously wrong on its own; the *difference* is what made the loop
+    unbounded, so it is removed by construction rather than by comment.
+
+    `None` means "not usable evidence". That is a different fact from "the
+    response was an empty market" (`[]` → `[]`), and the two must never
+    collapse into each other: one is a gap, the other is a real, paid-for
+    answer (the same distinction `FixtureMissingError` exists for).
     """
-    try:
-        payload = json.loads(blob)
-    except (ValueError, UnicodeDecodeError):
-        return None
     if isinstance(payload, dict):
         payload = payload.get("listings")
     if not isinstance(payload, list):
         return None
     return [record for record in payload if isinstance(record, dict)]
+
+
+def records_from_raw(blob: bytes) -> list[dict] | None:
+    """`records_in` over raw response bytes, or `None` if they are not JSON.
+
+    `None` also covers a body truncated or emptied by a crash — the caller's
+    question is always "is this evidence", and half a response is not.
+    """
+    try:
+        payload = json.loads(blob)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return records_in(payload)
 
 
 def read_raw_records(path: Path) -> list[dict] | None:

@@ -78,6 +78,14 @@ record, or no readable manifest at all). A record that says a window *failed*
 is real information the bytes cannot contradict — it stays failed, and stays
 owed.
 
+**A demoted window is not automatically an owed one**, and that is the third
+thing the store is asked. A response that is *gone* is worth a call; a response
+that is *there and unreadable* is not, because the call returns bytes already
+on disk and already paid for. Collapsing the two is not a rounding error — it
+has no stopping condition, so the window is re-bought on every attempt for as
+long as the user keeps trying (`_corroborate`, and `_StoredResponses` for why
+the store answers two questions rather than one).
+
 `as_of` ADVANCES ONLY WHEN BYTES ACTUALLY ARRIVE (PM ruling, F3-S4)
 --------------------------------------------------------------------
 `as_of` is "when this evidence was observed", and it is the pipeline's only
@@ -343,13 +351,13 @@ def pull_status(pull_ref: str) -> PullOutcome:
     Raises `CacheMissError` when there is no such pull.
     """
     manifest = read_manifest(pull_ref)
-    held = _held_signatures(pull_ref)
+    store = _stored_responses(pull_ref)
     corroborated = Manifest(
         as_of=manifest.as_of,
         window=manifest.window,
         planned=manifest.planned,
         fetchable=manifest.fetchable,
-        queries=tuple(_corroborate(query, held) for query in manifest.queries),
+        queries=tuple(_corroborate(query, store) for query in manifest.queries),
     )
     return PullOutcome(
         pull_ref=pull_ref,
@@ -362,23 +370,57 @@ def pull_status(pull_ref: str) -> PullOutcome:
     )
 
 
-def _corroborate(status: QueryStatus, held: set[str]) -> QueryStatus:
+def _corroborate(status: QueryStatus, store: _StoredResponses) -> QueryStatus:
     """A recorded window's status, checked against the bytes behind it.
 
-    One direction only: a claimed satisfaction with no usable response left on
-    disk is demoted to an open window. A recorded *failure* is never promoted
-    here — that would need the plan to know a signature was even expected, and
+    Demotion only: a claimed satisfaction with no usable response left on disk
+    is demoted to an open window. A recorded *failure* is never promoted here —
+    that would need the plan to know a signature was even expected, and
     `_reconcile` (which has it) is where that judgement is made.
+
+    **Demoting is not the same as owing**, and conflating the two is how a
+    window becomes an unbounded purchase. Two cases, one demotion, opposite
+    prices:
+
+    * the response file is **gone** — a call really does deliver something this
+      pull does not have, so the window is owed and priced at one call; and
+    * the response file is **there and unusable** — a call returns bytes we are
+      already holding and already paid for, so the window is missing (its
+      evidence cannot be produced) and **not owed**. This is the read-path
+      twin of `_fetch_one`'s "the sink filed it, so nothing is owed" rule, and
+      the reason it exists separately: a body the fetch path accepted and the
+      store cannot use reaches this function without ever raising, so the
+      typed guard never runs. Measured before it was fixed: 2 calls per attempt,
+      every attempt, for a window that could never complete.
+
+    The cost of being wrong is deliberately asymmetric. Refusing to re-buy a
+    file that a disk fault (rather than the response itself) made unreadable
+    leaves the pull honestly incomplete at zero cost, and the error below says
+    exactly how to clear it. Re-buying it spends the owner's month, with no
+    stopping condition — which is the failure D24 exists to prevent.
     """
-    if not status.satisfied or status.sig in held:
+    if not status.satisfied or status.sig in store.held:
         return status
+    if status.sig in store.filed:
+        return QueryStatus(
+            label=status.label,
+            sig=status.sig,
+            satisfied=False,
+            owed=False,
+            error=(
+                "this window's response is on disk and cannot be read as listings. It was "
+                "paid for and re-fetching returns the same bytes, so no call is owed for "
+                "it. If the file itself is damaged rather than the response, delete this "
+                "cache entry and search again."
+            ),
+        )
     return QueryStatus(
         label=status.label,
         sig=status.sig,
         satisfied=False,
         error=(
-            "the response that answered this window is no longer readable on disk, so "
-            "the window is open again"
+            "the response that answered this window is no longer on disk, so the window "
+            "is open again"
         ),
     )
 
@@ -595,9 +637,10 @@ def _reconcile(
 
     See the module docstring for the rule. In one sentence: **disk demotes a
     claimed satisfaction it cannot back, disk promotes a window the index is
-    silent about, and a recorded failure stands.**
+    silent about, a recorded failure stands — and a demotion is priced by
+    whether the response is gone or merely unreadable.**
     """
-    held = _held_signatures(key)
+    store = _stored_responses(key)
     index = {query.sig: query for query in (recorded.queries if recorded else ())}
 
     known: dict[str, QueryStatus] = {}
@@ -608,28 +651,45 @@ def _reconcile(
             # The manifest is unreadable, or readable and silent about this
             # window. Bytes filed under it were paid for; re-buying them to
             # rebuild an index is the double-pay D24 forbids.
-            if sig in held:
+            if sig in store.held:
                 known[sig] = QueryStatus(label=_label(query), sig=sig, satisfied=True)
             continue
-        known[sig] = _corroborate(status, held)
+        known[sig] = _corroborate(status, store)
     return known
 
 
-def _held_signatures(key: str) -> set[str]:
-    """Query signatures with at least one USABLE response filed under `key`.
+@dataclass(frozen=True)
+class _StoredResponses:
+    """What a cache entry's `raw/` directory actually holds, in two questions.
 
-    Usable, not merely present: a file truncated by a crash, emptied, or
-    standing as a directory is present and is not evidence — and a pull that
-    counted it would report itself whole over bytes nothing can be derived
-    from. `read_raw_records` draws that line in one place, so what this
-    function calls held and what `storage/pulls.py` can actually shape are the
-    same set.
+    `held` — signatures with at least one USABLE response. Usable, not merely
+    present: a file truncated by a crash, emptied, or standing as a directory
+    is present and is not evidence, and a pull that counted it would report
+    itself whole over bytes nothing can be derived from. `read_raw_records`
+    draws that line in one place, so what this module calls held and what
+    `storage/pulls.py` can actually shape are the same set by shared code.
+
+    `filed` — signatures with a response file at all, usable or not. The
+    difference between the two sets is exactly "we are holding bytes we cannot
+    read", which is the one state where a window is missing and still owes
+    nothing. Without it, "unusable" and "absent" are indistinguishable and the
+    unusable case is re-bought forever.
     """
+
+    held: frozenset[str]
+    filed: frozenset[str]
+
+
+def _stored_responses(key: str) -> _StoredResponses:
+    """Both sets in one pass over the entry's raw responses."""
     held: set[str] = set()
+    filed: set[str] = set()
     for path in raw_response_paths(key):
+        sig = _query_sig_of(path.stem)
+        filed.add(sig)
         if read_raw_records(path) is not None:
-            held.add(_query_sig_of(path.stem))
-    return held
+            held.add(sig)
+    return _StoredResponses(held=frozenset(held), filed=frozenset(filed))
 
 
 def _held_as_of(key: str, recorded: Manifest | None, today: date) -> date:

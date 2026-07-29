@@ -767,6 +767,36 @@ describe("useDerive", () => {
     // not. The user's next move after a failed derive is to nudge something
     // and try again, so this is the ordinary path out of an error, not an
     // edge case.
+    //
+    // ---------------------------------------------------------------------
+    // KNOWN SURVIVORS, DELIBERATELY LEFT ALIVE (reported to the PM, row 14b)
+    // ---------------------------------------------------------------------
+    // `error` is cleared in TWO places, and this test kills only the removal
+    // of BOTH. Measured, not assumed:
+    //
+    //   M8  success sets `error: prev.error` instead of null   -> SURVIVES
+    //   M9  the "deriving" reset keeps `prev.error`            -> SURVIVES
+    //   M8+M9 both                                             -> KILLED here
+    //
+    // That is the third instance in this one hook of "individually redundant,
+    // jointly load-bearing" — the pattern row 14b exists to correct. This
+    // instance is benign, and asserting it away would be a test defect:
+    //
+    //   * M8 is an EQUIVALENT mutant. No success can land while `error` is
+    //     set, because a fetch is only ever started by the effect and the
+    //     effect always writes the "deriving" reset first. `error: null` on
+    //     the success branch is unreachable-but-harmless defensive code.
+    //   * M9 is NOT equivalent — it is a real, defensible alternative. It
+    //     keeps the failure warning up THROUGH the retry, and during that
+    //     retry the warning is still true: the numbers on screen really are
+    //     from before the last edit until the retry comes back. Whether the
+    //     banner should come down when a re-derive STARTS or when it
+    //     SUCCEEDS is an honesty judgement about a user-facing message, and
+    //     `useDerive`'s story has no AC on it. Pinning either timing here
+    //     would be QA deciding a product question by writing a test — so
+    //     this asserts only the outcome both timings agree on: once a
+    //     successful derive has landed, the banner is down.
+    // ---------------------------------------------------------------------
     const handle = renderUseDerive(requestAt(1));
 
     const failing = await editAndFlush(handle, 2);

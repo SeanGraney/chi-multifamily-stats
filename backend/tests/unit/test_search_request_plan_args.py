@@ -71,6 +71,44 @@ def test_every_string_the_planner_or_the_cache_key_reads_is_trimmed(
     assert request(**{field: raw}).plan_args()[planner_key] == expected
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("3", "3"),  # bare = exact match on this endpoint, passed through
+        ("1-3", "1:3"),  # the user's hyphen form, converted by F2-S2's parser
+        ("2-2", "2:2"),  # degenerate ranges still emit colon syntax
+        ("3:4", "3:4"),  # already RentCast syntax — idempotent
+        (" 1-3 ", "1:3"),  # trimmed first, then parsed
+    ],
+)
+def test_a_bed_bath_value_reaches_the_wire_in_rentcast_syntax(raw: str, expected: str) -> None:
+    """F2-S2's parser, finally wired (QUEUE 2026-07-27: "that's F2-S1's job").
+
+    The conversion has to happen in Python. `client/query.py` is "the single
+    source of the syntax that spends money" — eight live calls out of a
+    50/month cap bought the colon rule — and a `replace("-", ":")` in the
+    form's TypeScript would be a second source of it, sitting outside every
+    test that protects the first.
+
+    Idempotence on `"3:4"` is what lets the same wire field carry both the
+    form's hyphen form and the syntax every existing caller already sends.
+    """
+    assert request(bedrooms=raw).plan_args()["bedrooms"] == expected
+    assert request(bathrooms=raw).plan_args()["bathrooms"] == expected
+
+
+@pytest.mark.parametrize("raw", ["4-2", "abc", "1-", "1–3", "-1"])
+def test_a_bed_bath_value_the_parser_refuses_raises_rather_than_reaching_the_wire(
+    raw: str,
+) -> None:
+    """`"4-2"` is the story's own "min≤max" edge. The parser rejects rather
+    than swapping (F2-S2 PM ruling 2), so an unswapped range must not slip
+    through as `bedrooms=4-2` — RentCast would answer that with something
+    plausible-looking and wrong."""
+    with pytest.raises(ValueError):
+        request(bedrooms=raw).plan_args()
+
+
 def test_property_types_are_trimmed_elementwise() -> None:
     """A multi-select posted from a form can pad any element. `propertyType`
     goes on the wire pipe-separated, so `" Townhouse"` would ask RentCast for a

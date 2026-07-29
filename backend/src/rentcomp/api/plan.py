@@ -78,7 +78,14 @@ def post_search_plan(request: SearchRequest) -> SearchPlan:
     cannot see, never repairs a month-day they got wrong, so `"02-30"` still
     comes back as something the form can show inline.
     """
-    search = request.plan_args()
+    try:
+        # Raises for a bed/bath value that is neither a bare count nor a
+        # range — including `"4-2"`, which F2-S2's parser refuses rather than
+        # silently reordering. The form blocks it first; this is what stops it
+        # being a 500 when something else does not.
+        search = request.plan_args()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
         # `date.today()` is read here and passed down, the same way

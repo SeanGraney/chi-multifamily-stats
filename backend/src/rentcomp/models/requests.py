@@ -31,6 +31,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from rentcomp.client.beds_baths import parse_bed_bath_field
+
 __all__ = ["DeriveRequest", "Filters", "SearchRequest", "Subject", "Weight"]
 
 #: A curation weight. Non-negative: a negative weight has no meaning in this
@@ -159,15 +161,55 @@ class SearchRequest(BaseModel):
         to `""`. The two are not interchangeable on the wire: T-S3 round 2 found
         that an *empty* bathrooms filter makes RentCast exclude records whose
         bathroom count is missing, so `""` would silently narrow the pull.
+
+        Raises `ValueError` for a bed/bath value that is neither — which both
+        routes turn into a 422 the form can show inline.
         """
-        bathrooms = self.bathrooms.strip() if self.bathrooms is not None else None
         return {
             "address": self.address.strip(),
             "radius": self.radius,
-            "bedrooms": self.bedrooms.strip(),
-            "bathrooms": bathrooms or None,
+            "bedrooms": _rentcast_range_field(self.bedrooms, field="bedrooms"),
+            "bathrooms": _rentcast_range_field(self.bathrooms, field="bathrooms"),
             "property_types": [value.strip() for value in self.property_types],
             "years_back": self.years_back,
             "window_start_mmdd": self.window_start.strip(),
             "window_end_mmdd": self.window_end.strip(),
         }
+
+
+def _rentcast_range_field(raw: str | None, *, field: str) -> str | None:
+    """A bed/bath value in RentCast query syntax, whichever form it arrived in.
+
+    This is where F2-S2's parser finally gets wired (QUEUE 2026-07-27: "the
+    function is correctly unwired since no consuming route or form exists yet —
+    that's F2-S1's job"). Two shapes reach this wire and both are legitimate:
+
+    * **The user's hyphen form** (`"1-3"`), which is what a search form yields
+      and what `parse_bed_bath_field` exists to convert. It must be converted
+      *here*, in Python: `client/query.py` is "the single source of the syntax
+      that spends money" — eight paid-for live calls bought the colon/pipe
+      rules — and a `"1-3".replace("-", ":")` in TypeScript would be a second
+      source of it, out of reach of every test that protects the first.
+    * **Colon syntax already** (`"3:4"`), which is the documented wire contract
+      of this field and what every existing caller sends. Passed through
+      untouched, so this function is idempotent on the parser's own output.
+
+    A malformed value raises `ValueError` naming the field and the input;
+    `"4-2"` raises too, because the parser refuses to reorder rather than
+    silently swapping (F2-S2 PM ruling 2). The form catches both before submit;
+    the routes translate whatever gets past it into a 422 rather than a 500.
+
+    Blank means "no filter", never `""` — see `plan_args`.
+    """
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    if ":" in stripped:
+        # Already this function's own output. Deliberately not re-validated:
+        # `rentcast_range` is what produced it, and re-parsing colon syntax
+        # here would put a second reading of that syntax in the tree — the one
+        # thing this function exists to avoid.
+        return stripped
+    return parse_bed_bath_field(stripped, field=field)

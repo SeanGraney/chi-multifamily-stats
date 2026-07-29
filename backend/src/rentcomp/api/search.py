@@ -75,7 +75,14 @@ def post_search(request: SearchRequest) -> SearchResult:
     whose `missing` names the windows that never arrived (§5a — an incomplete
     first pull is usable, with the gap named loudly).
     """
-    search = request.plan_args()
+    try:
+        # A bed/bath value the parser refuses (`"4-2"`, `"abc"`) is the user's
+        # input being wrong, not the tool — 422, not the 500 an uncaught
+        # ValueError out here would be.
+        search = request.plan_args()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     ref = pull_ref_for(**search)
 
     try:

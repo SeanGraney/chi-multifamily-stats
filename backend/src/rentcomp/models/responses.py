@@ -80,7 +80,7 @@ BucketId = Literal["below", "at", "above"]
 #: ARCHITECTURE.md §3's `leased` spelling is an erratum (PM ruling, F0-S2).
 RemovalClass = Literal["pending", "provisional", "confirmed"]
 
-#: Which set a median was computed over (F4-S4's thin-cohort fallback).
+#: Which set a median was computed over (F4-S5's thin-cohort fallback).
 Basis = Literal["selected", "pulled"]
 
 
@@ -195,10 +195,19 @@ class CohortStat(BaseModel):
     year: int
     selected_count: int
     pulled_count: int
+    #: Taken over the set `basis` names: the selected comps, or — when the
+    #: cohort is `thin` — all *pulled* comps in the year, each counting once
+    #: (F4-S5 [INVARIANT]).
     median_psf: float | None
     basis: Basis | None
-    #: `selected_count < min_cohort_size` (F4-S4 owns what happens next).
+    #: `selected_count < min_cohort_size`, and therefore also the condition
+    #: under which `basis` is `"pulled"`. F8-S3 renders the rail warning off
+    #: this plus the two counts — `basis` alone does not say *how* thin, and a
+    #: 3-of-5 cohort and a 1-of-1 cohort report the identical flag.
     thin: bool
+    #: The user's own selected evidence for this year, always — so a comp at
+    #: weight 0 is cited by no evidence list (F5-S2 [INVARIANT]) even while a
+    #: thin cohort's median is taken over the wider pulled set.
     comp_keys: list[str]
 
 

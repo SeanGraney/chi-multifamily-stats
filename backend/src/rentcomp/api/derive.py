@@ -22,8 +22,9 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from rentcomp.models.requests import DeriveRequest
-from rentcomp.models.responses import DerivedState
+from rentcomp.models.responses import DerivedState, PartialPullInfo
 from rentcomp.pipeline.derive import DeriveContext, derive
+from rentcomp.storage.cache import CacheMissError, read_manifest
 from rentcomp.storage.config import ConfigError, load_config
 from rentcomp.storage.pulls import PullNotFoundError, config_digest, load_shaped_pull
 
@@ -65,5 +66,32 @@ def post_derive(request: DeriveRequest) -> DerivedState:
         pull_ref=pull.ref,
         pull_digest=pull.digest,
         config_digest=config_digest(config),
+        partial_pull=_partial_pull(pull.ref),
     )
     return derive(request, context)
+
+
+def _partial_pull(pull_ref: str) -> PartialPullInfo | None:
+    """The gap in this pull's evidence, from its own manifest (F4-S9/D24 §5a).
+
+    Read at the edge for the same reason `as_of` is: the pipeline has no
+    access to a file, and which windows never arrived is not something it
+    could recompute from the comps it was handed. `None` for a pull with no
+    manifest — a synthetic fixture is whole by construction — and `None` for a
+    manifest with nothing missing, so the warning means something when it does
+    appear.
+
+    A missing cohort skews every number in the response it travels with, so
+    this is not decoration: without it, a partial pull renders identically to
+    a complete one.
+    """
+    try:
+        manifest = read_manifest(pull_ref)
+    except (CacheMissError, OSError, ValueError, KeyError):
+        return None
+    if not manifest.missing:
+        return None
+    return PartialPullInfo(
+        missing=list(manifest.missing),
+        calls_to_complete=manifest.calls_to_complete,
+    )

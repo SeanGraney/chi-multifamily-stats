@@ -520,11 +520,26 @@ def test_a_query_interrupted_between_pages_does_not_re_buy_the_page_it_holds(
     }, "the setup did not hold: page 0 of the truncated window is not on disk"
 
     resume = Wire(lambda request, n: ok([record(3)], total=3))
-    run_pull(**SEARCH, today=TODAY, transport=resume.transport)
+    second = run_pull(**SEARCH, today=TODAY, transport=resume.transport)
 
     offsets = [identity(request)[2] for request in resume.requests]
     assert not any(offset in (None, "0") for offset in offsets), (
         f"the resume re-entered a truncated window at offset 0 ({resume.sent}), buying a "
         "page whose bytes are already filed under this ref. Per-call file granularity is "
         "what makes a partial set meaningful; resuming per *query* throws that away (§5a)."
+    )
+    # The other half, and the reason this test is not satisfied by silence: a
+    # resume that decided the window was already held and skipped it entirely
+    # would send nothing at all, spend nothing, and leave the gap open forever.
+    # (Caught by probing a candidate fix against this file — the naive
+    # "any bytes under this signature means satisfied" rule XPASSes the line
+    # above while never fetching page 1.)
+    assert len(resume.requests) == 1, (
+        f"the resume sent {resume.sent} — the truncated window owes exactly its second "
+        "page: one call, at the offset where the interruption happened"
+    )
+    assert second.complete is True, (
+        "the resume issued no call for the page that never arrived, so the window is still "
+        "truncated. Not re-buying page 0 is only half the requirement; the other half is "
+        "that page 1 is still owed and still bought."
     )

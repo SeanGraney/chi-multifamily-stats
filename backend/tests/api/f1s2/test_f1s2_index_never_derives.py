@@ -81,6 +81,24 @@ derivation really goes through, by driving `POST /api/derive` — a route that
 `from`-imported `load_shaped_pull` — into it, and asserting the attempt was
 recorded *at `_shaped_pull`*. That label is the whole proof: it is what
 distinguishes a tripwire that works from one that only appears to.
+
+MUTATION RESULT (measured, not assumed)
+----------------------------------------
+`_row()` was given the per-row anchor F1-S1 invites, in its most likely form —
+`from rentcomp.storage.pulls import load_shaped_pull` at module scope, called
+once per row, wrapped in `except Exception: pass`:
+
+* the two index tests below failed, reporting
+  `rentcomp.api.workspaces.load_shaped_pull` — i.e. the **consumer-side** arm
+  caught it, and the `BaseException` choice defeated the bare `except`;
+* the other 154 F1-S2 tests (this directory, plus the developer's unit and API
+  files) **all passed**, which is the row this file exists to close;
+* a tripwire armed only at `rentcomp.storage.pulls.load_shaped_pull` — the
+  obvious one-line version of this test — also **passed** against the mutation.
+  The defining-module patch is invisible to a consumer that `from`-imported the
+  name before the test ran, so that version of this file would have been
+  vacuous against the exact change it was written to catch. That measurement is
+  why every door here is armed on both sides.
 """
 
 from __future__ import annotations

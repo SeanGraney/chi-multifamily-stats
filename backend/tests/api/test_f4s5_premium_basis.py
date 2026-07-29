@@ -355,6 +355,53 @@ def test_the_fallback_set_includes_comps_the_user_excluded(f4s5) -> None:
     )
 
 
+def test_every_pulled_comp_counts_once_in_the_fallback_median(f4s5) -> None:
+    """PM ruling (2026-07-29): **in the fallback, every pulled comp counts
+    once.** The user's weights do not travel into the replacement set.
+
+    The reasoning behind the ruling is what this test protects: the fallback
+    exists *because* the user's selection is insufficient evidence, so
+    importing that same user's weighting into the set that replaces it is
+    self-contradictory. "All pulled comps in that cohort" names a **set**, and
+    a set has no weights.
+
+    Constructed so the ruling is the only reading that passes. Cohort 2024
+    (psf 1.00 / 2.00 / 3.00) is thin at the default minimum with all three
+    comps still selected, and the cheapest comp carries an explicit weight of
+    5:
+
+        every pulled comp counts once  → median over {1,2,3} at 1:1:1 = 2.00
+        user weights carried into the
+        fallback set                   → median over {1,2,3} at 5:1:1 = 1.00
+
+    The weight is not being *ignored* — it still governs the anchor and the
+    contribution shares, asserted below — it simply has no vote in a median
+    taken over a set the user did not choose.
+    """
+    heavy, light = EXCLUDED_2024[1], EXCLUDED_2024[2]
+    derived = f4s5(weights={heavy: 5.0})
+    stat = cohort(derived, 2024)
+    assert stat["selected_count"] == 3 and stat["pulled_count"] == 3, (
+        "precondition: all three 2024 comps selected, and the cohort still thin at min 4"
+    )
+    assert stat["basis"] == "pulled"
+    assert stat["median_psf"] == pytest.approx(2.0, abs=TOL), (
+        f"the fallback median counts each pulled comp once -> 2.00; got "
+        f"{stat['median_psf']} (1.00 means the weight-5 comp was allowed to carry the "
+        f"median, i.e. the user's weights travelled into the fallback set)"
+    )
+    assert comp(derived, heavy)["premium"] == pytest.approx(1.0 / 2.0 - 1.0, abs=TOL)
+
+    # The other half of the ruling: the weight is real everywhere else.
+    heavy_share = comp(derived, heavy)["contribution_share"]
+    light_share = comp(derived, light)["contribution_share"]
+    assert heavy_share == pytest.approx(5.0 * light_share, rel=1e-9), (
+        f"a weight-5 comp must still contribute five times a weight-1 comp "
+        f"({heavy_share} vs {light_share}) — the ruling scopes the weights out of the "
+        f"fallback median only, not out of the analysis"
+    )
+
+
 def test_the_fallback_set_includes_comps_a_filter_removed(f4s5) -> None:
     """A filtered comp is pulled evidence as well — it was re-labelled, not
     removed (F7-S1: a filter never takes a comp out of the payload).

@@ -128,5 +128,46 @@ class SearchRequest(BaseModel):
     window_start: str
     window_end: str
     #: The user's explicit consent to re-spend on evidence already on disk —
-    #: set only by the REFRESH click in F3-S2's cache modal.
+    #: set only by the REFRESH click in F3-S2's cache modal. Read by
+    #: `POST /api/search` and by nothing else: the F2-S3 preview route accepts
+    #: the field (same body) but can no more act on it than it can fetch.
     force_refresh: bool = False
+
+    def plan_args(self) -> dict:
+        """This request in the planner's own argument names, whitespace trimmed.
+
+        One translation, both consumers — `POST /api/search` and
+        `POST /api/search/plan` — because the preview's `pull_ref` and call
+        count only mean anything if they describe the pull the submit would
+        actually perform. Two copies of this mapping would be the same drift
+        F2-S3 is [INVARIANT] against, one layer up.
+
+        Trimming is not cosmetic, and it is deliberately on *this* side of the
+        boundary (PM ruling 3, F2-S1):
+
+        * `plan_pull_queries` rejects `"06-01 "` outright and that strictness is
+          correct — a month-day the user got wrong must not be repaired — so the
+          space a form leaves behind has to come off before it gets there.
+        * F3-S1's cache key is computed over these exact strings, so a padded
+          address would make the user pay twice for one search.
+
+        Trimming is not laundering: `"13-01"` and `"02-30"` still reach the
+        planner unchanged and still raise, which is what the routes turn into a
+        422 the form can show inline.
+
+        A whitespace-only `bathrooms` resolves to `None` (no filter) rather than
+        to `""`. The two are not interchangeable on the wire: T-S3 round 2 found
+        that an *empty* bathrooms filter makes RentCast exclude records whose
+        bathroom count is missing, so `""` would silently narrow the pull.
+        """
+        bathrooms = self.bathrooms.strip() if self.bathrooms is not None else None
+        return {
+            "address": self.address.strip(),
+            "radius": self.radius,
+            "bedrooms": self.bedrooms.strip(),
+            "bathrooms": bathrooms or None,
+            "property_types": [value.strip() for value in self.property_types],
+            "years_back": self.years_back,
+            "window_start_mmdd": self.window_start.strip(),
+            "window_end_mmdd": self.window_end.strip(),
+        }

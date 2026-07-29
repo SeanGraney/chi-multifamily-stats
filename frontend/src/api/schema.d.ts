@@ -31,6 +31,63 @@ export interface paths {
      */
     post: operations["post_search_api_search_post"];
   };
+  "/api/search/plan": {
+    /**
+     * Preview a search's cohorts and call cost (fetches nothing)
+     * @description Price a search without running it.
+     *
+     * 422 for a window the planner refuses — trimming removes whitespace the user
+     * cannot see, never repairs a month-day they got wrong, so `"02-30"` still
+     * comes back as something the form can show inline.
+     */
+    post: operations["post_search_plan_api_search_plan_post"];
+  };
+  "/api/config": {
+    /**
+     * Read the §2.3 knobs
+     * @description The knobs as they are on disk, or §2.3's defaults when there is no file.
+     *
+     * Reading never writes (F0-S5): a fresh install must not have today's
+     * defaults frozen into a file by the act of opening Settings, or a future
+     * default change would silently not reach it.
+     */
+    get: operations["get_config_api_config_get"];
+    /**
+     * Replace the §2.3 knobs
+     * @description Persist every knob; answer with what is now stored.
+     *
+     * 422 comes from the model, before this function runs: an out-of-range knob,
+     * an unknown key, a non-canonical `drift_source`, unsorted `km_horizons_days`
+     * or `query_padding_days` all fail validation, so a refused save cannot have
+     * touched the file. Never clamped and never defaulted — a clamped knob is a
+     * lie, since the user sees the value they typed while the math uses another.
+     */
+    put: operations["put_config_api_config_put"];
+  };
+  "/api/settings/api-key": {
+    /**
+     * Is an API key configured?
+     * @description Presence only — never the key (module docstring).
+     *
+     * Settings has to render "configured" vs "not configured", and that is a
+     * boolean; anything richer would be a leak wearing a helpful face.
+     */
+    get: operations["get_api_key_status_api_settings_api_key_get"];
+    /**
+     * Store the RentCast API key
+     * @description Store `api_key` where `RentCastClient` will look for it.
+     *
+     * Surrounding whitespace is trimmed by `save_api_key`, and that is the case
+     * that bites hardest: a key pasted from a dashboard usually arrives with a
+     * trailing newline, and a stored key with a space in it fails authentication
+     * with a 401 that costs one of the month's 50 calls to discover.
+     *
+     * A blank (or whitespace-only) value is a 422, not a stored empty string — a
+     * stored blank produces a file that *looks* configured while `load_api_key()`
+     * reports `None`, so the user would find out at the first live pull.
+     */
+    put: operations["put_api_key_api_settings_api_key_put"];
+  };
 }
 
 export type webhooks = Record<string, never>;
@@ -58,6 +115,34 @@ export interface components {
       n_comps: number;
       /** Comp Keys */
       comp_keys: string[];
+    };
+    /**
+     * ApiKeyRequest
+     * @description The one field Settings sends. Never logged, never echoed back.
+     *
+     * Typed as a plain `str` with no length or pattern constraint: the only
+     * authority on what a usable key is, is `storage/secrets.py::save_api_key`,
+     * and a second opinion here would either reject a valid key or accept one
+     * that function then refuses.
+     */
+    ApiKeyRequest: {
+      /** Api Key */
+      api_key: string;
+    };
+    /**
+     * ApiKeyStatus
+     * @description Whether a key is configured. A boolean, by design — see the module
+     * docstring's security invariant.
+     *
+     * True when `load_api_key()` finds one, which is the only question worth
+     * answering: that function is what the RentCast client consults, so this
+     * reports whether a live pull would have a credential rather than whether
+     * some file exists. It is therefore also true when the key comes from
+     * `RENTCAST_API_KEY` rather than from a save made here.
+     */
+    ApiKeyStatus: {
+      /** Configured */
+      configured: boolean;
     };
     /** Band[KMCurve] */
     Band_KMCurve_: {
@@ -154,6 +239,22 @@ export interface components {
       count: number;
       /** Comp Keys */
       comp_keys: string[];
+    };
+    /**
+     * CohortPlan
+     * @description One cohort year in a planned pull, and whether it can be fetched.
+     *
+     * `fetchable` is false for a window that has not opened yet — the planner
+     * emits it anyway, and so does this, because "silently absent" and "planned
+     * but empty" are different things to a user checking whether their date
+     * window is the one they meant (`client/planner.py`). It costs nothing, so
+     * it is never billed either (F4-S1 AC4).
+     */
+    CohortPlan: {
+      /** Year */
+      year: number;
+      /** Fetchable */
+      fetchable: boolean;
     };
     /**
      * CohortStat
@@ -560,6 +661,35 @@ export interface components {
       calls_to_complete: number;
     };
     /**
+     * SearchPlan
+     * @description What `POST /api/search/plan` answers (F2-S3) — the cost of a search,
+     * before anyone has agreed to pay it.
+     *
+     * Spec §6.3's preview line, as data: *"Jun 15–30 · 2026, 2025 (2 cohorts) ·
+     * est. N API calls."* Every part of that sentence is a backend fact here,
+     * including the cohort years — D5/D13 make the SPA a renderer, and a frontend
+     * reconstructing the year set by subtracting from `new Date()` would be a
+     * second implementation of the planner's calendar rules.
+     *
+     * Deliberately the same field *names* as the overlapping half of
+     * `SearchResult`, because they are the same facts about the same search: a
+     * preview whose `estimated_calls` or `pull_ref` did not match the submit's
+     * would be worse than no preview at all.
+     */
+    SearchPlan: {
+      /** Pull Ref */
+      pull_ref: string;
+      /**
+       * Cache Status
+       * @enum {string}
+       */
+      cache_status: "hit" | "miss" | "stale";
+      /** Estimated Calls */
+      estimated_calls: number;
+      /** Cohorts */
+      cohorts: components["schemas"]["CohortPlan"][];
+    };
+    /**
      * SearchRequest
      * @description The subject + comp-net definition a search form submits (F2-S1/F4-S9).
      *
@@ -726,6 +856,135 @@ export interface operations {
       200: {
         content: {
           "application/json": components["schemas"]["SearchResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Preview a search's cohorts and call cost (fetches nothing)
+   * @description Price a search without running it.
+   *
+   * 422 for a window the planner refuses — trimming removes whitespace the user
+   * cannot see, never repairs a month-day they got wrong, so `"02-30"` still
+   * comes back as something the form can show inline.
+   */
+  post_search_plan_api_search_plan_post: {
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SearchRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["SearchPlan"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Read the §2.3 knobs
+   * @description The knobs as they are on disk, or §2.3's defaults when there is no file.
+   *
+   * Reading never writes (F0-S5): a fresh install must not have today's
+   * defaults frozen into a file by the act of opening Settings, or a future
+   * default change would silently not reach it.
+   */
+  get_config_api_config_get: {
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["Config"];
+        };
+      };
+    };
+  };
+  /**
+   * Replace the §2.3 knobs
+   * @description Persist every knob; answer with what is now stored.
+   *
+   * 422 comes from the model, before this function runs: an out-of-range knob,
+   * an unknown key, a non-canonical `drift_source`, unsorted `km_horizons_days`
+   * or `query_padding_days` all fail validation, so a refused save cannot have
+   * touched the file. Never clamped and never defaulted — a clamped knob is a
+   * lie, since the user sees the value they typed while the math uses another.
+   */
+  put_config_api_config_put: {
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["Config"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["Config"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Is an API key configured?
+   * @description Presence only — never the key (module docstring).
+   *
+   * Settings has to render "configured" vs "not configured", and that is a
+   * boolean; anything richer would be a leak wearing a helpful face.
+   */
+  get_api_key_status_api_settings_api_key_get: {
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["ApiKeyStatus"];
+        };
+      };
+    };
+  };
+  /**
+   * Store the RentCast API key
+   * @description Store `api_key` where `RentCastClient` will look for it.
+   *
+   * Surrounding whitespace is trimmed by `save_api_key`, and that is the case
+   * that bites hardest: a key pasted from a dashboard usually arrives with a
+   * trailing newline, and a stored key with a space in it fails authentication
+   * with a 401 that costs one of the month's 50 calls to discover.
+   *
+   * A blank (or whitespace-only) value is a 422, not a stored empty string — a
+   * stored blank produces a file that *looks* configured while `load_api_key()`
+   * reports `None`, so the user would find out at the first live pull.
+   */
+  put_api_key_api_settings_api_key_put: {
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ApiKeyRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["ApiKeyStatus"];
         };
       };
       /** @description Validation Error */

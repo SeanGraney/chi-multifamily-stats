@@ -21,6 +21,25 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 
 **Verdict: all four are reachable, and none of them needs the F8 anchor epic.** That is the finding that shapes this release — see row 26 for the code-level proof that F10-S1’s DOM statistics depend on `premium` (F4-S5 ✅) and `removal_class` (F4-S8 ✅), not on the anchor. F8-S1 stays the critical path for **F8-S2/S3, F10-S2’s dollar labels, F11, and F9** — it is simply not in this release’s way.
 
+### ⭐⭐ OWNER'S PRIORITY ORDER — ratified 2026-07-29 (session 10), *"go team, use this list as priority"*
+
+**This is the dispatch order. It supersedes the generic "what I would do next" in any handoff.**
+
+| # | Owner's ask | Rows, in order | Notes |
+|---|---|---|---|
+| **1** | **Exclude functional** | **F7-S1 finish** (row 20, one line) → **F4-S6** (row 12a, incl. the seam AC) | Exclude-by-weight already works on main; F7-S1 adds the filter strip. ⚠ **The seam AC is in slot 1 on purpose: without it the owner toggles comps on a FIXTURE.** "Exclude functional" is not functional against `ws1-real` |
+| **2** | **The cache** | **13c** → **37a** → **13b** → **row 36 (F3-S2 modal + F3-S3)** → **13g** | Durable write-through + resume already work. The gap the owner named is the *choose-before-spending modal* (row 36). The three defects ahead of it are all in the cache's own write/accounting path — shipping a modal that invites trust over a cache that can lose a page is the wrong order |
+| **3** | **Bucket DOM** | **9b** → **F10-S1** (row 26) | 13c from slot 2 is also a prerequisite here (it lands first anyway). 9b moves which comps enter a cohort median → which bucket a comp lands in. **Row 11b does NOT gate this** — it governs the KM event set |
+| **4** | **The map** | **F6-S1** → **F6-S2** (2 `[INVARIANT]`s) → **F6-S3** | `leaflet` + `react-leaflet` budgeted under D10 §1a, **not yet installed** — the F6-S1 dev installs them, no escalation. Longest lead item, so its QA goes out early even though the slot is last |
+
+**Running alongside, not competing:** row **10b** (already DISPATCHED, tree preserved) → unblocks **F5-S1** (row 16, the comp row). F5-S1 is slot-1-adjacent since the comp row is what carries the toggle.
+
+**9a** (`relistCount`) is dropped from the critical path to an owner decision — it is a false badge on the comp row, real but not blocking any of the four asks. **Do not dispatch it ahead of slots 1–4.**
+
+**Deliberately still OUT:** F8-S1/S2/S3, F9-S1, F10-S2's dollar labels, all F11, F12, F13, F14.
+
+---
+
 **Phase 0 — defects, per the owner’s instruction. These are prerequisites, not hygiene.**
 
 | Row | Why it is in THIS release |

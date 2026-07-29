@@ -61,7 +61,7 @@ from rentcomp.storage.cache import (
     manifest_fingerprint,
     raw_response_paths,
     read_manifest,
-    read_raw_records,
+    records_from_raw,
 )
 from rentcomp.storage.config import Config
 
@@ -376,7 +376,13 @@ def _load_cache_backed_pull(key: str, config: Config) -> ShapedPull:
     inactive: list[dict] = []
     raw_blobs: list[bytes] = []
     for path in paths:
-        records = read_raw_records(path)
+        try:
+            blob = path.read_bytes()
+        except OSError:
+            # A directory standing where a response belongs — crash debris, not
+            # evidence, and not a reason to fail the whole derive.
+            continue
+        records = records_from_raw(blob)
         if records is None:
             # Present is not the same as usable: a response truncated by a
             # crash, emptied, or in a shape this parser does not recognise is
@@ -384,7 +390,7 @@ def _load_cache_backed_pull(key: str, config: Config) -> ShapedPull:
             # out of it. `pull_status` reports the same file as an open window,
             # so the two answers agree about what this pull holds (F3-S4).
             continue
-        raw_blobs.append(path.read_bytes())
+        raw_blobs.append(blob)
         # "inactive" contains "active" as a substring, so it must be checked
         # first — a sig like "y2025-inactive-off000" must not be misfiled.
         bucket = inactive if "inactive" in path.stem else active

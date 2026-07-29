@@ -75,6 +75,7 @@ __all__ = [
     "read_manifest",
     "read_raw_meta",
     "read_raw_records",
+    "records_from_raw",
     "write_manifest",
     "write_raw_response",
 ]
@@ -385,14 +386,13 @@ def manifest_fingerprint(key: str) -> str:
     return sha256(body).hexdigest()[:16]
 
 
-def read_raw_records(path: Path) -> list[dict] | None:
-    """The listing records inside one stored raw response, or `None`.
+def records_from_raw(blob: bytes) -> list[dict] | None:
+    """The listing records inside one stored raw response body, or `None`.
 
-    `None` means "this file is not usable evidence" — it is missing,
-    truncated, empty, a directory, or a 2xx body in a shape this parser does
-    not recognise. That is a different fact from "the response was an empty
-    market" (`b"[]"` → `[]`), and the two must never collapse into each other:
-    one is a gap, the other is an answer.
+    `None` means "these bytes are not usable evidence" — truncated, empty, or
+    a 2xx body in a shape this parser does not recognise. That is a different
+    fact from "the response was an empty market" (`b"[]"` → `[]`), and the two
+    must never collapse into each other: one is a gap, the other is an answer.
 
     Mirrors `client.rentcast._extract_records`' notion of what a response is
     (a bare array, or `{"listings": [...]}`) but returns rather than raises,
@@ -400,14 +400,27 @@ def read_raw_records(path: Path) -> list[dict] | None:
     than handling a live response.
     """
     try:
-        payload = json.loads(path.read_bytes())
-    except (OSError, ValueError, UnicodeDecodeError):
+        payload = json.loads(blob)
+    except (ValueError, UnicodeDecodeError):
         return None
     if isinstance(payload, dict):
         payload = payload.get("listings")
     if not isinstance(payload, list):
         return None
     return [record for record in payload if isinstance(record, dict)]
+
+
+def read_raw_records(path: Path) -> list[dict] | None:
+    """`records_from_raw` over a stored response, or `None` if it cannot be read.
+
+    Also `None` for a file that is missing or is a directory — a crash can
+    leave either standing where a response belongs, and neither is evidence.
+    """
+    try:
+        blob = path.read_bytes()
+    except OSError:
+        return None
+    return records_from_raw(blob)
 
 
 def read_raw_meta(raw_path: Path) -> dict:

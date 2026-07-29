@@ -588,6 +588,156 @@ def test_no_type_of_unreadable_manifest_reaches_the_resume_diff(monkeypatch, err
     assert _read_manifest_or_none("5" * 64) is None
 
 
+# ---------------------------------------------------------------------------
+# the QA-verify defect: two parsers that disagreed, and a demotion with no price
+# ---------------------------------------------------------------------------
+#
+# `{"data": [...]}` is what a RentCast schema change looks like. The fetch path
+# read it as `[]` (a valid empty answer, no raise) and filed the window
+# `satisfied`; the store read the same bytes as unusable, so `_corroborate`
+# demoted it — and the demoted status carried no `owed`, so it fell back to
+# "not satisfied ⇒ owed". Measured before the fix: 2 calls per attempt, every
+# attempt, forever, on a window that can never complete. 14 of 50 in six tries.
+#
+# The shape is closed at its source (one shared definition of what a response
+# body is) AND the demotion is priced (gone vs unreadable), because either
+# alone leaves the other half of the failure standing.
+
+#: The canonical schema-change envelope: valid JSON, plainly a listings
+#: response to a human, and not a shape either parser is allowed to guess at.
+SCHEMA_CHANGE = b'{"data": [{"id": "new-envelope"}]}'
+
+
+def test_a_response_shape_we_cannot_read_is_never_bought_a_second_time(
+    live_env, no_network
+) -> None:
+    """The regression, priced in calls, over repeated attempts.
+
+    A schema change does not go away when the user tries again, so this is the
+    scenario in which an unbounded loop actually empties the month. The second
+    and later attempts run against a transport that RAISES on any request, so
+    "zero calls" is the absence of the mechanism rather than a counter that
+    could be read wrong.
+    """
+    wire = _Wire(
+        lambda request, n: httpx.Response(200, content=SCHEMA_CHANGE)
+        if n == 1
+        else _answer_each(request, n)
+    )
+    first = run_pull(**SEARCH, today=TODAY, transport=wire.transport)
+    spent_once = load_ledger().calls_this_month
+
+    assert first.complete is False, "a window whose body cannot be read is not a whole pull"
+    assert first.missing, "the unreadable window must be named"
+    assert first.calls_to_complete == 0, (
+        f"the pull quotes {first.calls_to_complete} call(s) to complete a window whose "
+        "response is already on disk. Re-fetching returns the same bytes, so the quote can "
+        "never come true and the user pays it on every attempt."
+    )
+
+    for attempt in range(2, 6):
+        outcome = run_pull(
+            **SEARCH, today=TODAY, transport=_NoPurchase().transport
+        )
+        assert outcome.calls_to_complete == 0
+        assert load_ledger().calls_this_month == spent_once, (
+            f"attempt {attempt} spent again. An unreadable response has no stopping "
+            "condition once it is treated as owed — this is the shape that burns a month."
+        )
+    assert no_network == []
+
+
+def test_the_bytes_of_an_unreadable_response_are_still_kept(live_env, no_network) -> None:
+    """D24's half of the same story: the call was billed, so the body stays.
+
+    Not owing a call for it is only defensible *because* the bytes are safe —
+    if a later story teaches the parser this envelope, the window re-parses for
+    free. A fix that stopped re-buying by throwing the response away would be
+    the wrong fix.
+    """
+    wire = _Wire(
+        lambda request, n: httpx.Response(200, content=SCHEMA_CHANGE)
+        if n == 1
+        else _answer_each(request, n)
+    )
+    outcome = run_pull(**SEARCH, today=TODAY, transport=wire.transport)
+
+    assert SCHEMA_CHANGE in {path.read_bytes() for path in raw_response_paths(outcome.pull_ref)}
+    assert no_network == []
+
+
+@pytest.mark.parametrize(
+    ("name", "payload"),
+    [
+        ("a bare array", [{"id": "a"}]),
+        ("an empty market", []),
+        ("the documented envelope", {"listings": [{"id": "a"}]}),
+        ("an empty documented envelope", {"listings": []}),
+        ("a schema change", {"data": [{"id": "a"}]}),
+        ("an error envelope", {"error": "nope"}),
+        ("an empty object", {}),
+        ("listings that are not a list", {"listings": "nope"}),
+        ("a scalar", 42),
+        ("null", None),
+        ("a string", "nope"),
+    ],
+)
+def test_the_fetch_path_and_the_store_agree_on_what_a_response_is(name, payload) -> None:
+    """The class, not the shape — the reason the definition is now shared.
+
+    Any body on which the live path says "usable" and the store says
+    "unusable" is a window that is filed satisfied, demoted on read, and bought
+    again on every attempt. `{"data": [...]}` was one such body; this asserts
+    there are none, over every envelope either side could plausibly meet.
+
+    Driven off the two real functions rather than a restatement of the rule, so
+    it keeps testing the thing even if the rule changes.
+    """
+    from rentcomp.client.rentcast import _extract_records
+    from rentcomp.storage.cache import records_in
+
+    stored = records_in(payload)
+    try:
+        fetched = _extract_records(payload)
+    except ResponseUnusableError:
+        fetched = None
+
+    assert fetched == stored, (
+        f"[{name}] the fetch path reads this body as {fetched!r} and the store reads it as "
+        f"{stored!r}. A body one side calls evidence and the other calls unusable is filed "
+        "satisfied, demoted on the next read, and re-bought on every attempt after that."
+    )
+
+
+def test_a_demotion_is_priced_by_whether_the_response_is_gone_or_unreadable(
+    live_env, no_network, home
+) -> None:
+    """`_corroborate`'s two cases, side by side, at the level a route sees.
+
+    The read path needs this even with the parsers agreed: a body the fetch
+    path accepted and the store later cannot use reaches `_corroborate` without
+    ever raising, so `_fetch_one`'s typed guard never runs. Same evidence
+    state, two different prices, and only one of them is a call.
+    """
+    outcome = run_pull(**SEARCH, today=TODAY, transport=_Wire().transport)
+    paths = sorted(raw_response_paths(outcome.pull_ref))
+    assert len(paths) >= 2, "the setup needs two windows to damage differently"
+
+    paths[0].unlink()  # gone — a call really would deliver something new
+    paths[1].write_bytes(SCHEMA_CHANGE)  # there, and unreadable
+
+    status = pull_status(outcome.pull_ref)
+
+    assert status.complete is False
+    assert len(status.missing) == 2, "both damaged windows must be named"
+    assert status.calls_to_complete == 1, (
+        f"{status.calls_to_complete} call(s) quoted for one response that is gone and one "
+        "that is present and unreadable. Only the missing file is worth a call; quoting the "
+        "unreadable one charges for bytes already on disk, every attempt, forever."
+    )
+    assert no_network == []
+
+
 def test_a_lost_manifest_is_rebuilt_from_the_store_rather_than_re_bought(
     live_env, no_network, home
 ) -> None:

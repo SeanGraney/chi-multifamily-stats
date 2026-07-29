@@ -52,7 +52,7 @@ from rentcomp.client.pull import (
 from rentcomp.client.rentcast import RentCastError
 from rentcomp.models.requests import SearchRequest
 from rentcomp.models.responses import SearchResult
-from rentcomp.storage.cache import CacheMissError
+from rentcomp.storage.cache import CORRUPT_MANIFEST_ERRORS, CacheMissError
 
 __all__ = ["router"]
 
@@ -89,7 +89,7 @@ def post_search(request: SearchRequest) -> SearchResult:
         prior: PullOutcome | None = pull_status(ref)
     except CacheMissError:
         prior = None
-    except (OSError, ValueError, KeyError) as exc:
+    except CORRUPT_MANIFEST_ERRORS as exc:
         # An entry that exists but cannot be read is NOT the same as no entry.
         # Treating it as a miss would re-pull — spending real calls to work
         # around a corrupt file — so it is surfaced instead, naming the entry

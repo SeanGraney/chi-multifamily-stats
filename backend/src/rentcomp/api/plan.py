@@ -59,7 +59,7 @@ from rentcomp.client.planner import fetchable_queries, plan_pull_queries
 from rentcomp.client.pull import pull_ref_for, pull_status
 from rentcomp.models.requests import SearchRequest
 from rentcomp.models.responses import CohortPlan, SearchPlan
-from rentcomp.storage.cache import CacheMissError
+from rentcomp.storage.cache import CORRUPT_MANIFEST_ERRORS, CacheMissError
 
 __all__ = ["router"]
 
@@ -128,10 +128,17 @@ def _cache_status(pull_ref: str) -> str:
     cache file would be a worse answer than "this looks like it needs a pull".
     `POST /api/search` still refuses that entry loudly (F4-S9), which is where
     it matters — that is the route that would otherwise re-buy it.
+
+    "Corrupt" is `CORRUPT_MANIFEST_ERRORS`, imported rather than spelled out
+    here: this promise is only as wide as that tuple, and the first version of
+    it listed `(OSError, ValueError, KeyError)` — which caught a broken *value*
+    and let a broken *type* through as a 500, i.e. one 500 per keystroke behind
+    the debounced form this route exists to feed. Sharing the name with
+    `api/search.py` is what stops the two drifting apart again.
     """
     try:
         return "hit" if pull_status(pull_ref).complete else "stale"
     except CacheMissError:
         return "miss"
-    except (OSError, ValueError, KeyError):
+    except CORRUPT_MANIFEST_ERRORS:
         return "miss"

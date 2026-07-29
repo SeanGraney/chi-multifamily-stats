@@ -486,7 +486,9 @@ def _build_comp(chain: Sequence[Spell], suspect: bool, as_of: date, config: Conf
         baths=last.baths,
         sqft=last.sqft,
         initial_ask=first.price,
-        effective_dom=((end_date or as_of) - first.listed).days,
+        # A censored chain's DOM is a floor measured to the PULL date (owner
+        # ruling 1), never the wall clock.
+        effective_dom=((as_of if end_date is None else end_date) - first.listed).days,
         censored=censored,
         removal_class=removal_class,
         cohort_year=first.listed.year,

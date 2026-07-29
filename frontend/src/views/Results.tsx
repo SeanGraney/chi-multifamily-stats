@@ -335,16 +335,14 @@ interface FilteredFooterProps {
  * calculation, but they did not leave the evidence: this is where they stay
  * reachable, and each one carries the INCLUDE that puts it back.
  *
- * [DEFAULT] the disclosure starts OPEN, where F7-S2's text says "collapsed".
- * Two reasons, and the deviation is logged rather than assumed: a comp the
- * user wants back is precisely the thing they are looking for once a filter
- * has hidden it, so putting it two clicks away works against the AC it
- * exists to serve; and F7-S1's own spec drives the per-row INCLUDE directly,
- * which a closed disclosure would make unreachable. The toggle is here, so
- * "collapsed" remains one click away and is remembered thereafter.
+ * The disclosure starts COLLAPSED, per F7-S2: the footer's resting state is
+ * the `"N filtered · show"` line, and the rows (with their per-row INCLUDE)
+ * appear on the first click of the toggle. The count is always visible even
+ * when closed, so the filtered set is never silently absent from the screen —
+ * that visibility, not an open list, is what keeps the filtered comps honest.
  */
 function FilteredFooter({ comps, count, weights, onInclude }: FilteredFooterProps) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   if (comps.length === 0) return null;
 

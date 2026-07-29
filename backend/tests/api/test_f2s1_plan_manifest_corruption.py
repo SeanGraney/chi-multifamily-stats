@@ -115,9 +115,12 @@ CORRUPTIONS: dict[str, str] = {
     ),
     # `tuple(5)` -> TypeError
     "window is not a sequence": json.dumps({"as_of": "2026-07-27", "window": 5}),
-    # `int([])` -> TypeError (note: `int("abc")` would be a *caught* ValueError)
+    # `int([1])` -> TypeError. Deliberately a NON-EMPTY list: `planned: []` is
+    # falsy, so `int(payload.get("planned") or 0)` quietly yields 0 and the
+    # entry reads as a complete `hit` — handled, but worth knowing.
+    # `planned: "abc"` would be a *caught* ValueError.
     "planned is not a number": json.dumps(
-        {"as_of": "2026-07-27", "window": ["01-01", "12-31"], "planned": []}
+        {"as_of": "2026-07-27", "window": ["01-01", "12-31"], "planned": [1]}
     ),
 }
 

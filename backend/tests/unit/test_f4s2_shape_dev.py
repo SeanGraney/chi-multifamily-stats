@@ -26,6 +26,7 @@ Zero live API calls — the fixtures are on disk (D17).
 from __future__ import annotations
 
 import json
+from collections import Counter
 from datetime import date
 from pathlib import Path
 
@@ -205,10 +206,25 @@ def test_shaping_the_real_pull_does_not_depend_on_which_response_a_record_arrive
     real_pull, real_comps
 ) -> None:
     """The whole-pull version of QA's two-record order-independence test.
-    Order is not evidence, at 539 records either."""
+    Order is not evidence, at 539 records either.
+
+    Compared as a **multiset**, not a set (F4-S3, QA's `Counter` form, PM
+    ruling E5 — it replaces the `set()` comparison that stood here rather
+    than sitting beside it): a set is equal whether a comp appears once or
+    twice, so the weaker assertion could not fail for the duplication F4-S2
+    exists to prevent, nor for a stitcher that loses one copy of a doubled
+    comp in one arrival order only. Both are live risks wherever spells
+    overlap, which is exactly the records that arrive split across the two
+    responses."""
     active, inactive = real_pull
     swapped = shape_raw_pull(inactive, active, Config(), AS_OF, *FULL_YEAR)
-    assert set(swapped) == set(real_comps)
+
+    forward = Counter(comp.model_dump_json() for comp in real_comps)
+    reverse = Counter(comp.model_dump_json() for comp in swapped)
+    assert forward == reverse, (
+        "shaping the real pull depends on which response a record arrived in; multiset "
+        f"difference: {sorted((forward - reverse) | (reverse - forward))[:5]}"
+    )
 
 
 def test_shaping_the_real_pull_is_deterministic(real_pull, real_comps) -> None:

@@ -18,9 +18,14 @@ Signature (ADR-001 §2.2): plain values in, plain values out. The stage
 receives psfs, years, and medians — and nothing else, so nothing else can
 influence a premium.
 
-SCOPE (F0-S2): the formula and its `None` propagation. **F4-S5 owns the basis
-fallback** — using the pulled-set median when a cohort is thin — so
-`premium_basis` is `"selected"` wherever a premium exists today.
+The thin-cohort fallback (F4-S5) is deliberately *not* here. Which set a
+cohort's median was taken over is a property of the cohort, decided in
+`pipeline/cohorts.py`, which already computes both counts and already owns
+`CohortStat.basis`; this stage divides by whatever median it is handed and
+never learns where that median came from. Keeping it that way is what keeps
+this signature down to psfs, years and medians — and a function that was not
+handed a comp record cannot reach a comp's outcome (D19a, ADR-001 §2.2,
+`tests/unit/test_f4s5_premium_stage_isolation.py`).
 """
 
 from __future__ import annotations

@@ -206,12 +206,23 @@ def test_distance_is_measured_from_the_subject_in_miles() -> None:
 
 def test_a_cohort_median_is_taken_over_the_selected_set_only() -> None:
     """F4-S5 [INVARIANT] is why premium is a per-request stage: toggling a comp
-    moves the median it is measured against."""
+    moves the median it is measured against.
+
+    `min_cohort_size=2` so that **both** arms stay at or above the minimum.
+    This test demonstrates the selected-set rule, and only that; a cohort below
+    the minimum falls back to the pulled set (F4-S5's other half), at which
+    point toggling `c` off would move nothing and this test would be quietly
+    demonstrating the opposite of what it says. Written at `4` originally
+    because the fallback did not exist yet — the `basis` assertions below are
+    what keep the two arms honest now that it does, and
+    `test_f4s5_cohort_fallback.py` covers the other side.
+    """
     keys = ["a", "b", "c"]
     psfs = [2.0, 3.0, 100.0]
     years = [2026, 2026, 2026]
-    all_in = cohort_medians(keys, psfs, years, [1.0] * 3, [True] * 3, 4)
-    without_outlier = cohort_medians(keys, psfs, years, [1.0, 1.0, 0.0], [True, True, False], 4)
+    all_in = cohort_medians(keys, psfs, years, [1.0] * 3, [True] * 3, 2)
+    without_outlier = cohort_medians(keys, psfs, years, [1.0, 1.0, 0.0], [True, True, False], 2)
+    assert all_in[0].basis == "selected" and without_outlier[0].basis == "selected"
     assert all_in[0].median_psf == 3.0  # lower weighted median of 2/3/100
     assert without_outlier[0].median_psf == 2.0
     assert without_outlier[0].comp_keys == ["a", "b"]

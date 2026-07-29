@@ -88,7 +88,7 @@ DELIBERATELY NOT TESTED HERE (and why):
   ``test_derivation_modules_never_read_config_from_disk``.
 * Whether the pipeline actually honors any knob -- that belongs to F4-S3
   (stitch gap), F4-S8 (provisional/withdrawal), F11-S1 (k), F10-S1 (bucket
-  half-width), F4-S4 (min cohort), F4-S1 (PAD).
+  half-width), F4-S5 (min cohort), F4-S1 (PAD).
 
 EXPECTED RED STATE TODAY: ``test_module_imports_and_exports`` FAILS with the
 ModuleNotFoundError detail; ``test_storage_package_exposes_rentcomp_home``

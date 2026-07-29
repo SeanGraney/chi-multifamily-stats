@@ -354,9 +354,10 @@ def test_anchor_carries_the_drift_band_and_the_fixed_sensitivity(derive) -> None
 
 
 def test_cohorts_report_thinness_and_their_basis(derived) -> None:
-    """F4-S4: a thin cohort falls back and says so. What is pinned here is
+    """F4-S5: a thin cohort falls back and says so. What is pinned here is
     that the flag and the basis are reported at all — the threshold behaviour
-    is F4-S4's."""
+    is F4-S5's, walked in ``test_f4s5_premium_basis.py`` and
+    ``test_f4s5_cohort_fallback.py``."""
     assert derived["cohorts"], "no cohort stats in the response"
     for cohort in derived["cohorts"]:
         for field in ("year", "selected_count", "pulled_count", "median_psf", "basis", "thin", "comp_keys"):
@@ -685,10 +686,85 @@ def test_comp_keys_are_unique_over_the_real_ws1_pull(derive) -> None:
         assert isinstance(comp["key"], str) and comp["key"], "a comp has an empty key"
 
 
+# ---------------------------------------------------------------------------
+# cohort evidence (F4-S5)
+# ---------------------------------------------------------------------------
+
+
+def test_cohort_comp_keys_enumerate_the_selected_set_even_when_the_median_falls_back(
+    derive, derived
+) -> None:
+    """Evidence-first taken literally, and **locked by F4-S5** (PM ruling
+    2026-07-29): a cohort's ``comp_keys`` are the comps the *user selected* in
+    that year — always, including when the median itself was taken over the
+    wider pulled set.
+
+    This started life as a QA proposal reading "…or the pulled set when the
+    cohort fell back", which the PM has now overridden. The reason is that the
+    alternative breaks two `[INVARIANT]`s outright: F5-S2's "weight 0 ≡
+    excluded, and excluded means gone from the math" is asserted over *every*
+    evidence list in the payload by ``test_f5s2_selection_weight.py::
+    test_weight_zero_removes_a_comp_from_every_aggregate`` and
+    ``::test_a_filtered_comp_contributes_to_nothing_while_it_is_filtered``, and
+    on this fixture zeroing any $/sqft-bearing comp trips the fallback. A
+    curated-out comp reappearing in a click-through list is a bigger lie than a
+    median whose set is wider than its list — especially since the payload
+    states the width (`pulled_count`) beside it.
+
+    The fallback arm is exercised **for real** here rather than described: the
+    default body's cohorts both sit exactly on `min_cohort_size`, so one
+    weight-0 is the entire distance to a fallen-back cohort. Asserted as an
+    explicit precondition, because the previous version of this test only ever
+    ran its `basis == "selected"` branch and would have accused a correct
+    implementation the day a thin cohort reached it.
+
+    What F8-S3 codes against is the last assertion: under ``basis == "pulled"``
+    the median's set is *wider* than the named list, and the payload says by
+    how much. (QUEUE row 12b owns whether the fallback set should also become
+    click-through-reachable on the wire; nothing here pre-empts that.)
+    """
+    target = next(comp["key"] for comp in derived["comps"] if comp["psf"] is not None)
+    payloads = {"default": derived, "one-comp-excluded": derive(weights={target: 0.0}).json()}
+
+    fell_back = []
+    for label, payload in payloads.items():
+        for cohort in payload["cohorts"]:
+            assert len(cohort["comp_keys"]) == cohort["selected_count"], (
+                f"[{label}] cohort {cohort['year']} reports selected_count "
+                f"{cohort['selected_count']} but names {len(cohort['comp_keys'])} comps — "
+                "a count and its click-through cannot disagree"
+            )
+            if cohort["basis"] != "pulled":
+                continue
+            fell_back.append((label, cohort["year"]))
+            assert cohort["selected_count"] < cohort["pulled_count"], (
+                f"[{label}] cohort {cohort['year']} fell back to the pulled set, so that "
+                f"set must be strictly wider than the {cohort['selected_count']} comps "
+                f"named in comp_keys; pulled_count is {cohort['pulled_count']}"
+            )
+            assert target not in cohort["comp_keys"], (
+                f"[{label}] comp {target!r} is at weight 0 and is still cited as this "
+                "cohort's evidence — the fallback widens the median's SET, it does not "
+                "put a curated-out comp back into a click-through list (F5-S2)"
+            )
+
+    assert fell_back, (
+        "no cohort fell back in either payload, so the basis=='pulled' half of this "
+        f"contract went untested. Excluding {target!r} must drop its cohort below "
+        "min_cohort_size — if the fixture pull or the knob has moved, this test is "
+        "vacuous and needs a new construction, not a green tick"
+    )
+
+
 class TestProposedContract:
     """QA-proposed behaviour that neither the story nor ADR-001 states
     outright. The PM/owner confirms (or overrides) these before they count as
-    locked — the repo convention established by F0-S3/F0-S5."""
+    locked — the repo convention established by F0-S3/F0-S5.
+
+    ``test_cohort_comp_keys_enumerate_the_set_the_median_came_from`` used to
+    live here; F4-S5 decided it, so it moved out to module level above (PM
+    ruling 2026-07-29 — first half confirmed, second half overridden). Leaving
+    a settled question inside a class named "proposed" is its own defect."""
 
     def test_an_unknown_pull_ref_is_a_clean_404(self, derive) -> None:
         """A stale workspace pointing at a pull that no longer exists is a
@@ -699,19 +775,6 @@ class TestProposedContract:
             f"unknown pull_ref returned {response.status_code}; expected a clean 404 "
             f"({response.text[:300]})"
         )
-
-    def test_cohort_comp_keys_enumerate_the_set_the_median_came_from(self, derived) -> None:
-        """Evidence-first taken literally: a cohort median's ``comp_keys`` are
-        the comps it was computed over — which is the selected set, or the
-        pulled set when the cohort fell back (F4-S4)."""
-        for cohort in derived["cohorts"]:
-            if cohort["median_psf"] is None:
-                continue
-            expected = cohort["selected_count"] if cohort["basis"] == "selected" else cohort["pulled_count"]
-            assert len(cohort["comp_keys"]) == expected, (
-                f"cohort {cohort['year']} has basis={cohort['basis']!r} and "
-                f"{expected} comps in that set, but names {len(cohort['comp_keys'])}"
-            )
 
     def test_a_weight_may_not_be_negative(self, derive) -> None:
         """Consistent with the PM-confirmed F0-S3 ruling that caller bugs

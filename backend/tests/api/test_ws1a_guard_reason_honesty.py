@@ -45,6 +45,14 @@ satisfy this without inventing a new wire value, that is exactly the kind of
 finding that belongs back in front of the PM/owner (Semantic Change
 Protocol), not something to route around silently in the implementation.
 
+**RETIRED BY F11-S2 (2026-07-28).** The SCOPE NOTE above is kept for the
+history, but its premise no longer holds: `stats/km.py` exists, `CurveResult`
+is constructible, and at the real pull's own anchor the endpoint now returns a
+curve. The claim this module defends is unchanged — `too_few_in_range` may
+never be reported where the evidence is not thin — and is now asserted against
+whichever arm the endpoint returns. See the in-test note in
+`test_reason_is_never_too_few_in_range_when_the_real_evidence_is_not_thin`.
+
 EXPECTED RED STATE TODAY: `test_reason_is_never_too_few_in_range_when_the_
 real_evidence_is_not_thin` FAILS. The others pass today by coincidence
 (documented per-test) but are pinned as permanent regression coverage.
@@ -101,16 +109,49 @@ def test_reason_is_never_too_few_in_range_when_the_real_evidence_is_not_thin(der
     # than a differently-reasoned guard does, so the claim is asserted against
     # whichever branch the endpoint returns rather than against a branch
     # choice this module never owned.
-    if price_test["state"] == "curve":
-        assert "reason" not in price_test, (
-            "a CurveResult carries a guard reason — the two arms must not be confusable"
-        )
-        return
-
+    # QA VERIFY (F11-S2, 2026-07-28) — the developer's edit above is ACCEPTED,
+    # and then strengthened. Mutation-tested both ways before touching it:
+    #
+    #   * MUTANT "guard always returns too_few_in_range" (the original WS-1a
+    #     bug) -> this test still FAILS. So the edit did NOT produce a test
+    #     that cannot fail; the claim it was written to defend is intact.
+    #   * MUTANT "guard never trips" (a curve at EVERY rent, including the
+    #     genuinely thin $4,500 candidate) -> the developer's version SURVIVED,
+    #     because `"reason" not in price_test` is a tautology: `CurveResult`
+    #     has `extra="forbid"` and no `reason` field, so pydantic guarantees it
+    #     (`test_derivation_graph.py` already asserts that on the model).
+    #
+    # The developer framed the choice as "weaken this test, or gerrymander the
+    # guard so the curve loses at 1.00x drift" — but there is a third option it
+    # missed, and it is the honest one: assert the POSITIVE evidence condition
+    # that justifies taking the curve branch at all. That is the same fixture
+    # canary the guard branch below already carries, and skipping it whenever
+    # the curve wins means fixture drift that destroys this module's premise
+    # would go unnoticed.
+    #
+    # It cannot false-fail: a `CurveResult` means the MID edge passed the
+    # guard, so >= 3 of mid's own k-set are within +/-3 premium points of the
+    # mid candidate and at least one is uncensored — and mid's k-set is a
+    # subset of the union reported in `neighbors`, whose `distance` is measured
+    # against that same mid candidate. Measured margin at this rent: 21 of 21
+    # in range, 0 censored.
     in_range = _usable_in_range_count(price_test["neighbors"])
     all_censored = bool(price_test["neighbors"]) and all(
         n["censored"] for n in price_test["neighbors"]
     )
+    if price_test["state"] == "curve":
+        assert "reason" not in price_test, (
+            "a CurveResult carries a guard reason — the two arms must not be confusable"
+        )
+        assert in_range >= 3 and not all_censored, (
+            f"a curve was rendered at ${at_market_rent}/mo on {in_range} in-range "
+            f"neighbour(s) (all_censored={all_censored}) — the curve branch must be "
+            "taken BECAUSE the evidence is thick, not in spite of it being thin. "
+            "This is the prototype failure NORTH_STAR names, in the opposite "
+            "direction from the WS-1a bug this module was written for."
+        )
+        return
+
     assert in_range >= 3 and not all_censored, (
         "fixture/environment assumption broke: QA measured >= 18 in-range, uncensored "
         f"neighbours at the real anchor rent (${at_market_rent}); got in_range={in_range}, "

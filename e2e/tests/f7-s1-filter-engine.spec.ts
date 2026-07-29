@@ -125,8 +125,24 @@ const VENV_PYTHON = path.join(VENV_BIN, process.platform === "win32" ? "python.e
  */
 const BACKEND_SRC = path.join(REPO_ROOT, "backend", "src");
 
-test.describe.configure({ mode: "serial" });
-
+/**
+ * DELIBERATELY NOT `mode: "serial"`, unlike every other spec in this suite.
+ *
+ * `playwright.config.ts` already pins `fullyParallel: false` and
+ * `workers: 1`, so these tests run in order, in one worker, sharing one
+ * `beforeAll` server either way. The ONLY thing serial mode adds is: when one
+ * test fails, skip every test after it. Verified on the first red run of this
+ * file — "1 failed, 6 did not run, 1 passed".
+ *
+ * "did not run" is the same family as the silent skip WORKFLOW.md §2 calls
+ * this project's most persistent defect class: it hides the state of six
+ * acceptance criteria behind the first one that breaks. A test-first spec
+ * exists precisely to tell the developer which ACs are red, so it must report
+ * all of them on every run.
+ *
+ * Nothing here depends on a previous test: each test navigates fresh and the
+ * derive endpoint is stateless and writes nothing (ARCHITECTURE.md §4).
+ */
 let serverProcess: ChildProcess | null = null;
 let rentcompHome: string | null = null;
 let setupFailure: string | null = null;

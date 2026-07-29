@@ -221,6 +221,7 @@ export default function Results() {
       />
       <FilteredFooter
         comps={filteredOut}
+        count={derived.breakdown.filtered}
         weights={weights}
         onInclude={includeOverride}
       />
@@ -317,6 +318,14 @@ function FilterStrip({ strip, onChange, onReset }: FilterStripProps) {
 
 interface FilteredFooterProps {
   comps: DerivedComp[];
+  /**
+   * `breakdown.filtered`, not `comps.length`. The two are equal by F7-S1's
+   * reconciliation invariant, which is exactly why the server's number is the
+   * one to render: if they ever disagreed, the honest thing is for the screen
+   * to say what the derivation says, not to quietly paper over it with a count
+   * of the rows this component happens to have been handed.
+   */
+  count: number;
   weights: Record<string, number>;
   onInclude: (key: string, weight: number) => void;
 }
@@ -334,7 +343,7 @@ interface FilteredFooterProps {
  * which a closed disclosure would make unreachable. The toggle is here, so
  * "collapsed" remains one click away and is remembered thereafter.
  */
-function FilteredFooter({ comps, weights, onInclude }: FilteredFooterProps) {
+function FilteredFooter({ comps, count, weights, onInclude }: FilteredFooterProps) {
   const [open, setOpen] = useState(true);
 
   if (comps.length === 0) return null;
@@ -342,7 +351,7 @@ function FilteredFooter({ comps, weights, onInclude }: FilteredFooterProps) {
   return (
     <div data-testid="filtered-footer" className="mt-4 border-t border-grey pt-2">
       <p className="text-xs text-rust flex items-center gap-2">
-        <span>{comps.length} filtered</span>
+        <span>{count} filtered</span>
         <span aria-hidden="true">·</span>
         <button
           type="button"

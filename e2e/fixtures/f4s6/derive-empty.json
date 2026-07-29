@@ -1,0 +1,119 @@
+{
+  "comps": [],
+  "cohorts": [],
+  "anchor": null,
+  "buckets": [
+    {
+      "id": "below",
+      "premium_min": null,
+      "premium_max": -0.04,
+      "dollar_min": null,
+      "dollar_max": null,
+      "count": 0,
+      "leased_dom_median": null,
+      "leased_dom_min": null,
+      "leased_dom_max": null,
+      "cut_before_lease_rate": null,
+      "provisional_count": 0,
+      "withdrawal_suspect_count": 0,
+      "censored_floors": [],
+      "comp_keys": []
+    },
+    {
+      "id": "at",
+      "premium_min": -0.04,
+      "premium_max": 0.04,
+      "dollar_min": null,
+      "dollar_max": null,
+      "count": 0,
+      "leased_dom_median": null,
+      "leased_dom_min": null,
+      "leased_dom_max": null,
+      "cut_before_lease_rate": null,
+      "provisional_count": 0,
+      "withdrawal_suspect_count": 0,
+      "censored_floors": [],
+      "comp_keys": []
+    },
+    {
+      "id": "above",
+      "premium_min": 0.04,
+      "premium_max": null,
+      "dollar_min": null,
+      "dollar_max": null,
+      "count": 0,
+      "leased_dom_median": null,
+      "leased_dom_min": null,
+      "leased_dom_max": null,
+      "cut_before_lease_rate": null,
+      "provisional_count": 0,
+      "withdrawal_suspect_count": 0,
+      "censored_floors": [],
+      "comp_keys": []
+    }
+  ],
+  "price_test": null,
+  "breakdown": {
+    "pulled": 0,
+    "included": 0,
+    "excluded": 0,
+    "filtered": 0,
+    "censored": 0,
+    "pending": 0,
+    "provisional": 0,
+    "missing_sqft": 0,
+    "per_cohort": [],
+    "comp_keys": {
+      "pulled": [],
+      "included": [],
+      "excluded": [],
+      "filtered": [],
+      "censored": [],
+      "pending": [],
+      "provisional": [],
+      "confirmed": [],
+      "withdrawal_suspect": [],
+      "missing_sqft": []
+    }
+  },
+  "warnings": [
+    {
+      "code": "provisional_field",
+      "message": "sqft_suspect is always false \u2014 the >30% cohort-median $/sqft deviation flag (F5-S1) is not built yet.",
+      "breakdown_ref": null
+    },
+    {
+      "code": "provisional_field",
+      "message": "premium_basis is always \"selected\" \u2014 the pulled-set fallback for thin cohorts (F4-S5) is not built yet.",
+      "breakdown_ref": null
+    },
+    {
+      "code": "no_anchor",
+      "message": "No selected comp has a $/sqft, so there is no anchor to express the candidate rent against and no price test was run.",
+      "breakdown_ref": null
+    }
+  ],
+  "meta": {
+    "as_of": "2026-07-29",
+    "pull_ref": "a0629c2e0c48de326a1e86dfd98c8183cf3fb6bfd0002559d494074e3b6ef635",
+    "pull_digest": "c7cd5474b7f18fc5a2c1ade1ee92fc95721594bda0cbdf96ce32bb3bbeafcb51",
+    "config_digest": "9b909673234eb8d36a5a764fb4342c67a8d81e74edd81e1757ac704afc352acc",
+    "pipeline_version": "0.1.0-f4s8",
+    "config": {
+      "stitch_gap_days": 42,
+      "provisional_lease_days": 7,
+      "withdrawal_suspect_months": 6,
+      "knn_k": 7,
+      "bucket_half_width_pct": 4.0,
+      "min_cohort_size": 4,
+      "drift_source": "manual",
+      "km_horizons_days": [
+        14,
+        30,
+        45,
+        60
+      ]
+    },
+    "partial_pull": null
+  }
+}

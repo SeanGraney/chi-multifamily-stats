@@ -1,0 +1,11 @@
+{
+  "pull_ref": "c1dc50ae88784e3ab386db185c2b18e957edfcb50072dd444bd7445b1b50880e",
+  "cache_status": "stale",
+  "estimated_calls": 4,
+  "calls_spent": 0,
+  "complete": false,
+  "missing": [
+    "2019 Inactive"
+  ],
+  "calls_to_complete": 1
+}

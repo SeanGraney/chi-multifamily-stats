@@ -238,6 +238,48 @@ async function inlineErrors(page: Page): Promise<Locator> {
   return page.locator("[data-testid^='search-error']").or(page.getByRole("alert"));
 }
 
+/** One observation per preview response, in arrival order. */
+interface PlanObservation {
+  status: number;
+  estimatedCalls: number | null;
+}
+
+/**
+ * Records EVERY `POST /api/search/plan` response, newest last.
+ *
+ * Why not `page.waitForResponse`: that resolves on the *first* response, and
+ * the preview effect is debounced with one `AbortController` per request — so
+ * the number on screen is the number from the LAST response, which is not
+ * necessarily the first. Filling the form usually produces exactly one request
+ * (every field lands inside the 400ms debounce), but "usually" is a flake:
+ * whenever an inter-fill gap exceeds the debounce, an earlier request goes out
+ * carrying the form's *default* window rather than the one this spec fills, and
+ * the two disagree on days when the filled window is structurally empty for the
+ * current year and the default one is not. Comparing against the latest
+ * response is both flake-free and the stronger assertion — latest-wins is the
+ * D13 property this preview is supposed to have. (Mechanism identified by the
+ * F2-S1 developer; the defect was in this spec, not in the implementation.)
+ */
+function recordPlanResponses(page: Page): PlanObservation[] {
+  const seen: PlanObservation[] = [];
+  page.on("response", (res) => {
+    if (!res.url().includes(PLAN_PATH) || res.request().method() !== "POST") return;
+    // Pushed synchronously so arrival order is exact; the body is filled in
+    // when it resolves.
+    const entry: PlanObservation = { status: res.status(), estimatedCalls: null };
+    seen.push(entry);
+    void res
+      .json()
+      .then((body: { estimated_calls?: number }) => {
+        entry.estimatedCalls = typeof body?.estimated_calls === "number" ? body.estimated_calls : null;
+      })
+      .catch(() => {
+        /* superseded or non-JSON — left null, the poll below simply waits */
+      });
+  });
+  return seen;
+}
+
 // ===========================================================================
 // harness — loud, never a silent skip
 // ===========================================================================
@@ -480,20 +522,19 @@ test.describe("F2 · cohort plan preview", () => {
   test("the preview line renders the cohort plan and a call estimate before submit", async ({
     page,
   }) => {
+    const observed = recordPlanResponses(page);
     await openSearchForm(page);
-    const planResponse = page.waitForResponse(
-      (res) => res.url().includes(PLAN_PATH) && res.request().method() === "POST",
-      { timeout: 15_000 },
-    );
     await fillValidSearch(page);
 
-    const response = await planResponse;
-    expect(
-      response.status(),
-      "the preview must come from the backend: D5/D13 forbid the SPA computing a statistic, " +
-        "and the call estimate is the number the user consents to spend against",
-    ).toBe(200);
-    const payload = (await response.json()) as { estimated_calls: number };
+    await expect
+      .poll(() => observed.length, {
+        message:
+          "no POST /api/search/plan was made. The preview must come from the backend: D5/D13 " +
+          "forbid the SPA computing a statistic, and the call estimate is the number the user " +
+          "consents to spend against",
+        timeout: 15_000,
+      })
+      .toBeGreaterThan(0);
 
     const preview = byTestIdOr(
       page,
@@ -505,9 +546,33 @@ test.describe("F2 · cohort plan preview", () => {
     // ONE value flowing through proves the wiring (AGENT_QA.md split rule);
     // the estimate's CORRECTNESS is asserted exhaustively at L2 in
     // backend/tests/api/test_f2s1_search_preview.py.
+    //
+    // Compared against the LATEST response rather than the first: the effect is
+    // debounced and aborts superseded requests, so the line on screen is by
+    // construction the newest one's. Re-read inside the poll so it converges
+    // once typing has settled instead of racing a request still in flight.
     await expect
-      .poll(async () => (await preview.innerText()).replace(/\s+/g, " "), { timeout: 10_000 })
-      .toContain(String(payload.estimated_calls));
+      .poll(
+        async () => {
+          const latest = observed[observed.length - 1];
+          if (!latest || latest.estimatedCalls === null) return false;
+          const text = (await preview.innerText()).replace(/\s+/g, " ");
+          return text.includes(String(latest.estimatedCalls));
+        },
+        {
+          message:
+            "the preview line does not show the call estimate from the most recent " +
+            "/api/search/plan response — either the number is not rendered, or a superseded " +
+            "response landed on screen after a newer one (D13 latest-wins)",
+          timeout: 10_000,
+        },
+      )
+      .toBe(true);
+
+    expect(
+      observed[observed.length - 1].status,
+      "the preview that reached the screen must be a 200 from the backend",
+    ).toBe(200);
   });
 
   test("the preview updates live when years back changes", async ({ page }) => {

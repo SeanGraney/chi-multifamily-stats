@@ -277,6 +277,15 @@ function skipIfSetupFailed() {
 
 const isDerive = (url: string) => url.includes("/api/derive");
 
+/**
+ * The weight a manual per-row INCLUDE puts on a comp that was at 0.
+ *
+ * Named rather than inlined because it is the ONE number that has to agree
+ * with `Results.tsx`'s `INCLUDED_WEIGHT`, and because what matters is not the
+ * value but that it is > 0 and that ALL does not overwrite it.
+ */
+const INCLUDED_WEIGHT_AFTER_MANUAL_INCLUDE = 1;
+
 function rows(page: Page) {
   return page.locator("[data-testid='comp-row']");
 }
@@ -327,7 +336,64 @@ function includeOverrideControl(page: Page, key: string) {
 }
 
 function anchorText(page: Page) {
-  return page.locator("[data-testid='anchor']").or(page.getByText(/anchor:/i)).first();
+  return page.locator("[data-testid='anchor']").first();
+}
+
+/**
+ * The anchor panel's text, with a vacuity guard.
+ *
+ * ⚠ The fallback this used to carry — `getByText(/anchor:/i)` — was a defect
+ * QA shipped and the F7-S1 developer caught. Playwright resolves `getByText`
+ * to the SMALLEST element holding the text, which here is the constant
+ * `"Anchor: "` caption, so the "the anchor moved" assertion would have
+ * compared `"Anchor:"` with `"Anchor:"` and passed forever. Removed rather
+ * than repaired: a fallback that can be satisfied by a constant is worse than
+ * no fallback, because it converts a missing testid from a loud failure into
+ * a silent pass. (The developer put `data-testid="anchor"` on the panel — the
+ * element whose text actually changes — which is the right half of the fix.)
+ *
+ * The digit check is the belt to that braces: whatever this resolves to, it
+ * must contain a number, or the comparison is between two labels.
+ */
+async function anchorReading(page: Page): Promise<string> {
+  const text = (await anchorText(page).innerText()).trim();
+  expect(
+    text,
+    `the anchor panel reads ${JSON.stringify(text)}, which contains no number — a ` +
+      '"the anchor changed" assertion against this would be comparing two constant ' +
+      "labels and could never fail",
+  ).toMatch(/\d/);
+  return text;
+}
+
+/**
+ * Open the "N filtered · show" footer, asserting it started COLLAPSED.
+ *
+ * PM ruling (F7-S1 verify): F7-S2 §124 specifies a *collapsed* footer, and
+ * keeping filtered comps out of the main view is the point of filtering them.
+ * The developer shipped it open and logged the deviation, partly so this spec
+ * could reach `filtered-include` directly — but driving the disclosure is the
+ * more faithful test, because the affordance is part of what the story
+ * specifies. So the default is asserted here rather than accommodated.
+ */
+async function expandFilteredFooter(page: Page): Promise<void> {
+  const toggle = page
+    .locator("[data-testid='filtered-toggle']")
+    .or(page.getByRole("button", { name: /^\s*(show|hide)\s*$/i }))
+    .first();
+  await expect(
+    toggle,
+    "no disclosure control for the filtered comps — F7-S2 §124 specifies a collapsed " +
+      '"N filtered · show" footer, so there must be something to click',
+  ).toBeVisible({ timeout: 10_000 });
+  expect(
+    (await toggle.innerText()).trim().toLowerCase(),
+    'the filtered footer did not start collapsed: its disclosure already reads "hide". ' +
+      'F7-S2 §124 says collapsed "N filtered · show" (PM ruling, F7-S1 verify) — filtered ' +
+      "comps are the ones the user asked to stop seeing, so they must not reappear in full " +
+      "underneath the list they were just removed from",
+  ).toBe("show");
+  await toggle.click();
 }
 
 /** Navigate to Results and wait for its first derive. */
@@ -533,7 +599,7 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
     const initial = await gotoResults(page);
     await requireFilterControls(page);
 
-    const before = await anchorText(page).innerText();
+    const before = await anchorReading(page);
     const { payload } = await deriveCausedBy(page, () => hideCensoredControl(page).click());
 
     expect(
@@ -546,7 +612,7 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
     ).toBeLessThan(initial.anchor.n_comps);
 
     await expect(async () => {
-      const after = await anchorText(page).innerText();
+      const after = await anchorReading(page);
       expect(
         after,
         `the anchor on screen still reads ${JSON.stringify(before)} after a filter took ` +
@@ -577,6 +643,9 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
     const target = filtered.payload.comps.find((c: any) => c.state === "filtered")?.key;
     expect(target, "the filter took nothing, so there is nothing to override back in").toBeTruthy();
 
+    // The comps a filter took are behind a collapsed disclosure (PM ruling) —
+    // reaching one is part of the flow, not a detail to bypass.
+    await expandFilteredFooter(page);
     const overridden = await deriveCausedBy(page, () =>
       includeOverrideControl(page, target).click(),
     );
@@ -701,6 +770,109 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
       cleared.payload.comps.find((c: any) => c.key === marked)?.weight,
       `${marked} came back from behind the filter at a weight other than the 3 the user set`,
     ).toBe(3);
+  });
+
+  // -------------------------------------------------------------------------
+  // AC11 — the footer's INCLUDE writes a weight, and row 23 must still hold
+  // -------------------------------------------------------------------------
+
+  test("a no-sqft comp re-included from the footer survives ALL and is zeroed by NONE", async ({
+    page,
+  }) => {
+    // ---------------------------------------------------------------------
+    // ⚠ THIS RE-TESTS QUEUE.md ROW 23'S ASYMMETRY THROUGH F7-S1'S NEW DOOR.
+    //
+    // The developer's footer INCLUDE writes TWO things: the override, and —
+    // when the comp is at weight 0 — weight 1, so that a button labelled
+    // INCLUDE does something the user can see. A no-sqft comp is weight 0 by
+    // the defaulting rule, so this is exactly the path that could quietly
+    // undo row 23.
+    //
+    // Row 23 says ALL and NONE are deliberately NOT inverses: ALL sweeps only
+    // comps with a $/sqft, so a MANUAL re-include of a no-sqft comp survives
+    // it; NONE zeroes everything visible, that comp included. The question
+    // this test answers is whether a comp that arrived in the visible set via
+    // the footer's INCLUDE is still governed by that rule, or whether the
+    // weight the INCLUDE wrote makes it look like an ordinary selection.
+    //
+    // It also settles the "second channel" worry from the other side: the
+    // click is a MANUAL act (which is what the F5 epic requires for a no-sqft
+    // comp), so writing a weight is the right thing for it to do — the server
+    // still refuses to let the override itself select anything, which
+    // `test_an_override_does_not_override_the_weight` pins unchanged at L2.
+    // ---------------------------------------------------------------------
+    await gotoResults(page);
+    await requireFilterControls(page);
+
+    // One comp is MADE no-sqft on every response, and additionally made
+    // filtered-and-weight-0 until the INCLUDE is clicked. After that its state
+    // comes from the server, so when ALL/NONE run it is a genuinely VISIBLE
+    // no-sqft comp — which is the only configuration that tests row 23 rather
+    // than passing because the comp was still hidden.
+    let noSqftKey = "";
+    let stillHidden = true;
+    await page.route("**/api/derive", async (route: Route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      noSqftKey = payload.comps.map((c: any) => c.key).sort().at(0);
+      const comp = payload.comps.find((c: any) => c.key === noSqftKey);
+      comp.psf = null;
+      comp.contribution_share = null;
+      if (stillHidden) {
+        comp.state = "filtered";
+        comp.weight = 0;
+      }
+      await route.fulfill({ response, json: payload });
+    });
+
+    await page.reload();
+    await expect(rows(page).first()).toBeVisible({ timeout: 20_000 });
+    expect(noSqftKey, "the route interception never ran").not.toBe("");
+
+    await expandFilteredFooter(page);
+    stillHidden = false;
+    const included = await deriveCausedBy(page, () =>
+      includeOverrideControl(page, noSqftKey).click(),
+    );
+    expect(
+      included.body.include_overrides ?? [],
+      "the footer INCLUDE did not record an override",
+    ).toContain(noSqftKey);
+    expect(
+      included.body.weights?.[noSqftKey],
+      "the footer INCLUDE left a no-sqft comp at weight 0. It has no $/sqft, so it defaults " +
+        "to 0 and an override alone cannot select it (F5-S2: selection IS the weight) — a " +
+        "button that says INCLUDE and leaves the comp excluded has done nothing visible",
+    ).toBe(INCLUDED_WEIGHT_AFTER_MANUAL_INCLUDE);
+
+    // It must now really be in the visible list, or ALL/NONE would skip it for
+    // the wrong reason and this test would pass vacuously.
+    await expect(
+      rowFor(page, noSqftKey),
+      "the re-included comp is not in the comp list, so the bulk actions below would not " +
+        "reach it and row 23 would be untested",
+    ).toBeVisible({ timeout: 10_000 });
+
+    // --- ALL: sweeps what is selectable by default; leaves the manual one.
+    const all = await deriveCausedBy(page, () => bulkButton(page, "all").click());
+    expect(
+      all.body.weights?.[noSqftKey],
+      `ALL overwrote a manual re-include of a no-sqft comp (now ` +
+        `${String(all.body.weights?.[noSqftKey])}). QUEUE.md row 23: ALL means "select what ` +
+        'is selectable by default", and a no-sqft comp is not — the F5 epic makes it ' +
+        '"excluded by default, MANUAL re-include allowed", and a bulk sweep is not a manual ' +
+        "act. F7-S1's footer INCLUDE must not have turned it into an ordinary selection",
+    ).toBe(INCLUDED_WEIGHT_AFTER_MANUAL_INCLUDE);
+
+    // --- NONE: deselects everything visible, this one included.
+    const none = await deriveCausedBy(page, () => bulkButton(page, "none").click());
+    expect(
+      none.body.weights?.[noSqftKey],
+      `NONE left the no-sqft comp at ${String(none.body.weights?.[noSqftKey])}. "Deselect ` +
+        'everything I can see" has no ambiguous cases, and the comp IS visible now — a comp ' +
+        "still carrying weight after the user pressed NONE is hidden state. Row 23's two " +
+        "halves are asymmetric on purpose; this is the half that must not be softened",
+    ).toBe(0);
   });
 
   // -------------------------------------------------------------------------

@@ -177,6 +177,18 @@ class Pull:
         """
         return {p.name: p.read_bytes() for p in (self.entry / "raw").glob("*.json")}
 
+    def raw_stat_snapshot(self) -> dict[str, tuple[int, int]]:
+        """`(size, mtime_ns)` per raw response — the stronger form of the pin.
+
+        Bytes alone would not notice a re-fetch that happened to write the same
+        content, which in fixture mode is exactly what a re-pull looks like.
+        """
+        out = {}
+        for p in (self.entry / "raw").glob("*.json"):
+            stat = p.stat()
+            out[p.name] = (stat.st_size, stat.st_mtime_ns)
+        return out
+
     def drop_fixtures(self) -> None:
         """Delete the saved responses a re-fetch would need.
 

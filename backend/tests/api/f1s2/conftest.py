@@ -139,6 +139,65 @@ def another_pull(api, fixture_mode, rentcomp_home, clear_caches):
 
 
 @pytest.fixture
+def partial_pull(api, fixture_mode, rentcomp_home, clear_caches) -> Pull:
+    """A pull with a real gap in it — one window that never arrived.
+
+    Seeds every fetchable window except the first, so `run_pull` records that
+    window as missing (§5a). Reopening a workspace over an incomplete pull must
+    still cost nothing: completing it is the user's decision in F3-S2's modal,
+    never a side effect of clicking a recent row.
+    """
+    from rentcomp.client.planner import fetchable_queries, plan_pull_queries
+    from rentcomp.client.rentcast import fixture_signature
+
+    queries = fetchable_queries(plan_pull_queries(TODAY, **PLAN_ARGS))
+    assert len(queries) >= 2, "need at least two fetchable windows to leave a gap in one"
+    for index, query in enumerate(queries[1:], start=1):
+        payload = json.dumps([record(index)]).encode("utf-8")
+        (fixture_mode / f"{fixture_signature(query.params)}.json").write_bytes(payload)
+    clear_caches()
+
+    response = api.post(SEARCH_PATH, json=SEARCH_BODY)
+    assert response.status_code == 200, f"the partial fixture pull failed: {response.text[:400]}"
+    body = response.json()
+    assert body["complete"] is False and body["missing"], (
+        "the partial-pull fixture came back complete, so nothing it is used to test would be "
+        f"testing a gap: {body}"
+    )
+    return Pull(ref=body["pull_ref"], fixtures_dir=fixture_mode, home=rentcomp_home)
+
+
+@pytest.fixture
+def no_fetch_allowed(monkeypatch):
+    """Arm a tripwire on the only way this process can fetch anything.
+
+    `client/pull.py` reaches the source through exactly one door —
+    `RentCastClient.fetch_listings` — in fixture mode and on the live path
+    alike. Replacing it with a raiser asserts the ABSENCE OF THE MECHANISM
+    rather than the value of a counter: `calls_this_month` cannot move in
+    fixture mode, so a ledger assertion here would pass against a route that
+    re-pulled everything (the tests-that-cannot-fail shape this project has now
+    caught four times).
+
+    Returns the list of attempts, so a test can also assert one was made.
+    """
+    from rentcomp.client import rentcast as rentcast_module
+
+    attempts: list[Any] = []
+
+    def _boom(self, params, *args, **kwargs):  # noqa: ANN001
+        attempts.append(dict(params))
+        raise AssertionError(
+            "a workspace operation called RentCastClient.fetch_listings. Opening a recent "
+            "search is free by construction (F1 'Success: zero API calls'); anything that "
+            f"reaches the source here would spend real money on the live path. params={params}"
+        )
+
+    monkeypatch.setattr(rentcast_module.RentCastClient, "fetch_listings", _boom, raising=True)
+    return attempts
+
+
+@pytest.fixture
 def comp_keys(api, pull) -> list[str]:
     """Real `comp_key`s from the fixture pull — what curation weights are keyed
     on (F13-S1 [INVARIANT])."""

@@ -637,9 +637,13 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
     // Give one hidden comp a weight no bulk action would ever write, so
     // "left alone" and "overwritten" are distinguishable rather than
     // coincidentally equal (the technique row 14b established).
+    // One action per `deriveCausedBy`: clearing the filter and typing a
+    // weight each cause their own derive, and a compound action would race
+    // whichever request happened to land first (and would then assert against
+    // the wrong body).
     const marked = hidden[0];
+    await deriveCausedBy(page, () => resetControl(page).click());
     const withMark = await deriveCausedBy(page, async () => {
-      await resetControl(page).click();
       await weightIn(page, marked).fill("3");
       await weightIn(page, marked).blur();
     });

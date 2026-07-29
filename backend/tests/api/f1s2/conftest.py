@@ -263,6 +263,37 @@ def saved_workspace(workspaces, pull, comp_keys):
 
 
 @pytest.fixture
+def workspace_file(rentcomp_home):
+    """`workspace_file(key) -> Path` — the file holding one saved workspace.
+
+    Searched for rather than assumed, so the corruption tests do not depend on
+    the [DEFAULT]'s exact filename; `test_f1s2_zero_calls.py` is the one place
+    the `workspaces/<cache-key>.json` location itself is pinned.
+    """
+
+    def _find(key: str):
+        candidates = [
+            p
+            for p in sorted(rentcomp_home.rglob("*"))
+            if p.is_file()
+            and "cache" not in p.relative_to(rentcomp_home).parts
+            and key in p.name
+        ]
+        assert candidates, (
+            f"no file under {rentcomp_home} (outside cache/) is named for the workspace {key}; "
+            "the corruption tests need to be able to corrupt it"
+        )
+        assert len(candidates) == 1, (
+            f"more than one file claims to hold workspace {key}: {candidates}. A second store "
+            "that can drift from the first is exactly what 'the recents list is an index over "
+            "stored workspaces' forbids."
+        )
+        return candidates[0]
+
+    return _find
+
+
+@pytest.fixture
 def workspace_files(rentcomp_home):
     """`workspace_files() -> list[Path]` — whatever the store wrote, wherever.
 

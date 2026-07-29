@@ -364,6 +364,11 @@ def keys_in(response: Any) -> list[str]:
     return [row_key(row) for row in rows_in(response)]
 
 
+def rows_by_key(response: Any) -> dict[str, dict]:
+    """The recents rows, addressable by the workspace they are about."""
+    return {row_key(row): row for row in rows_in(response)}
+
+
 def is_json_error(response: Any) -> bool:
     """True when a >=400 response is a *deliberate* error rather than a crash.
 

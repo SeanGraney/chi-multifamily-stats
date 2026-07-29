@@ -308,7 +308,13 @@ def test_an_unknown_key_is_a_clean_404(workspaces) -> None:
         "..%2Fsecrets.json",
         "%2e%2e%2f%2e%2e%2fsecrets.json",
         ".hidden",
-        "a\x00b",
+        # Percent-encoded, not literal: `httpx` refuses to build a URL holding a
+        # raw NUL, so `"a\x00b"` died in the CLIENT and never reached the app —
+        # the request under test was never made. `%00` is what a hostile client
+        # would actually send, and Starlette unquotes it back to `a\x00b` in the
+        # path parameter, so this is the same probe, actually delivered.
+        # (Substituted by F1-S2's developer, disclosed to QA via the PM.)
+        "a%00b",
     ],
 )
 def test_a_traversing_key_cannot_escape_the_workspaces_directory(

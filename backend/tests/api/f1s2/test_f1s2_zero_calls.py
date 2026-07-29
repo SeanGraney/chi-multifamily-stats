@@ -177,19 +177,42 @@ def test_opening_a_recent_over_an_INCOMPLETE_pull_still_costs_nothing(
 
 
 def test_listing_recents_never_reaches_the_fetch_seam(
-    workspaces, saved_workspace, another_pull, no_fetch_allowed
+    workspaces, saved_workspace, another_pull, monkeypatch
 ) -> None:
     """Home renders on launch. If building the recents index could fetch, the
-    tool would spend money for merely being opened."""
+    tool would spend money for merely being opened.
+
+    The tripwire is armed INSIDE the test rather than taken from the
+    `no_fetch_allowed` fixture, and that is load-bearing: building the second
+    cache entry below is a real (fixture-mode) pull, which
+    `test_the_no_fetch_tripwire_actually_fires` proves must reach
+    `fetch_listings`. With the fixture's raiser already installed at setup time
+    the ARRANGE step tripped it and the test failed 500 in its own scaffolding,
+    never reaching the act. (Restructured by F1-S2's developer — no assertion
+    changed; disclosed to QA via the PM.)
+    """
     from f1s2_support import OTHER_SEARCH_BODY
 
     second = another_pull(OTHER_SEARCH_BODY)
     assert workspaces.save(second.ref, curation(second.ref)).status_code < 300
 
+    from rentcomp.client import rentcast as rentcast_module
+
+    attempts: list = []
+
+    def _boom(self, params, *args, **kwargs):  # noqa: ANN001
+        attempts.append(dict(params))
+        raise AssertionError(
+            "listing recents called RentCastClient.fetch_listings. Home renders on launch; "
+            f"anything that reaches the source here spends money to open the tool. {params}"
+        )
+
+    monkeypatch.setattr(rentcast_module.RentCastClient, "fetch_listings", _boom, raising=True)
+
     response = workspaces.recents()
 
     assert response.status_code == 200, f"{response.status_code}: {response.text[:300]}"
-    assert no_fetch_allowed == []
+    assert attempts == []
 
 
 # ===========================================================================

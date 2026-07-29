@@ -233,10 +233,14 @@ def _derived_comp(
 
     `as_of` arrives as an argument like every other input (there is no clock
     below the API edge — see this module's docstring). It is used for exactly
-    one thing: `days_since_removal`, which is the *same* subtraction
-    `pipeline/shape.py` already classified the comp by, restated as a number
-    the row can print. Both read `comp.removed_on`, so the badge and the
-    figure beside it cannot disagree about when the unit left the market.
+    one thing: `days_since_removal`, the same subtraction `pipeline/shape.py`
+    already classified the comp by, restated as a number the row can print.
+
+    `shape.py` measured `as_of − the chain's final removal`; `removed_on`
+    reconstructs that same day from the `effective_dom` that measurement
+    produced. So the rung and the figure beside it cannot disagree about when
+    the unit left the market — pinned directly, at both ends, by
+    `tests/unit/test_f4s8_removed_on.py`.
     """
     removed_on = comp.removed_on
     return DerivedComp(

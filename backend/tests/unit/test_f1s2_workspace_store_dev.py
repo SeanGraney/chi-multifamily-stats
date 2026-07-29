@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -96,6 +97,38 @@ def state(pull_ref: str = KEY, **overrides) -> WorkspaceState:
     }
     fields.update(overrides)
     return WorkspaceState(**fields)
+
+
+# ===========================================================================
+# the harness itself — which tree is actually under test
+# ===========================================================================
+
+
+def test_the_rentcomp_under_test_is_the_one_beside_this_file() -> None:
+    """The run must be about the checkout this test file lives in.
+
+    `.venv/Lib/site-packages/*.pth` points at the MAIN checkout's `backend/src`
+    (verified 2026-07-29: it holds one line,
+    `C:\\Users\\RC\\github\\chi-multifamily-stats\\backend\\src`), so a bare
+    `pytest` from inside a git worktree runs the worktree's TESTS against
+    MAIN's SOURCE. It does not error and it does not skip — it answers
+    confidently about the wrong code, which is the worst failure mode a test
+    run has. WORKFLOW.md §2 documents it; it has bitten this project twice.
+
+    This makes the invariant an observation instead of a convention: nobody has
+    to remember to prove it by hand, because a wrong-tree run fails here first.
+    """
+    import rentcomp
+
+    package_root = Path(rentcomp.__file__).resolve().parents[3]  # <root>/backend/src/rentcomp/__init__.py
+    tests_root = Path(__file__).resolve().parents[3]  # <root>/backend/tests/unit/<this>
+
+    assert package_root == tests_root, (
+        f"these tests live under {tests_root} but `import rentcomp` resolved to "
+        f"{package_root}. The run is testing a different checkout's source — set "
+        f"PYTHONPATH={tests_root / 'backend' / 'src'} (WORKFLOW.md §2; on Windows the "
+        "PYTHONPATH separator is ';', not ':')."
+    )
 
 
 # ===========================================================================

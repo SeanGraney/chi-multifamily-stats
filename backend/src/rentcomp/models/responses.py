@@ -146,6 +146,21 @@ class DerivedComp(BaseModel):
     censored: bool
     #: `None` iff censored — a still-active listing has not been removed.
     removal_class: RemovalClass | None
+    #: Whole days between this comp's final removal and the pull date — the
+    #: number `removal_class` was decided by, and the "4d" in F4-S8's row copy
+    #: *"removed 4d — classifying"*. `None` iff `removal_class` is `None`.
+    #:
+    #: A **count, not a date**, deliberately. `removed_on` alone would leave
+    #: the view subtracting it from `meta.as_of` — a derivation the view is not
+    #: allowed to perform (D5) and, in JS, date arithmetic across a timezone
+    #: boundary, which D15 keeps out of this codebase entirely. Shipping the
+    #: difference means the only client-side step left is formatting.
+    #:
+    #: Carried for **every** removed comp, not only pendings: it is a plain
+    #: fact about the comp, and a field that existed only in one state would
+    #: make the row's rendering branch on a field's presence rather than on the
+    #: ladder rung it is displaying.
+    days_since_removal: int | None
     withdrawal_suspect: bool
     sqft_suspect: bool
 

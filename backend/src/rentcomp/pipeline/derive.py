@@ -92,7 +92,14 @@ DRIFT_SENSITIVITY_PTS = 2.0
 #: candidate returns a `CurveResult` instead of a guard that had no curve to
 #: offer. That changes real output values, hence the bump. F11-S3 still owns
 #: the guard's trip *thresholds*. See `pipeline/pricetest.py`.
-PIPELINE_VERSION = "0.1.0-f11s2"
+#:
+#: F4-S8 adds `DerivedComp.days_since_removal`, so a payload from this build
+#: is not interchangeable with one from the last — which is the whole point of
+#: reporting a version. Bumping is free of collateral damage by construction:
+#: `PIPELINE_VERSION` deliberately does **not** enter the cache key (F3-S1,
+#: `test_a_pipeline_version_bump_does_not_change_the_key`), so a release never
+#: evicts a pull the user paid for.
+PIPELINE_VERSION = "0.1.0-f4s8"
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,7 +177,7 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
 
     contributions = contribution_shares(weights, included)
     derived_comps = [
-        _derived_comp(comp, key, psf, premium, bucket, distance, weight, share, state)
+        _derived_comp(comp, key, psf, premium, bucket, distance, weight, share, state, ctx.as_of)
         for comp, key, psf, premium, bucket, distance, weight, share, state in zip(
             comps,
             keys,
@@ -220,7 +227,18 @@ def _derived_comp(
     weight: float,
     share: float | None,
     state: str,
+    as_of: date,
 ) -> DerivedComp:
+    """One comp on the wire.
+
+    `as_of` arrives as an argument like every other input (there is no clock
+    below the API edge — see this module's docstring). It is used for exactly
+    one thing: `days_since_removal`, which is the *same* subtraction
+    `pipeline/shape.py` already classified the comp by, restated as a number
+    the row can print. Both read `comp.removed_on`, so the badge and the
+    figure beside it cannot disagree about when the unit left the market.
+    """
+    removed_on = comp.removed_on
     return DerivedComp(
         key=key,
         address=comp.address,
@@ -240,6 +258,7 @@ def _derived_comp(
         effective_dom=comp.effective_dom,
         censored=comp.censored,
         removal_class=comp.removal_class,
+        days_since_removal=None if removed_on is None else (as_of - removed_on).days,
         withdrawal_suspect=comp.withdrawal_suspect,
         sqft_suspect=comp.sqft_suspect,
         cut_history=[

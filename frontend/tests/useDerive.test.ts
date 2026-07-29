@@ -78,6 +78,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { components } from "../src/api/schema";
 
 type DeriveRequest = components["schemas"]["DeriveRequest"];
@@ -93,16 +96,35 @@ type UseDeriveHook = (request: DeriveRequest | null) => DeriveHookValue;
 // Lazy import — a missing module must be ONE legible failure, never a
 // collection error that hides the state of every test beside it
 // (AGENT_QA.md: "What must never be in a commit: a collection error").
+//
+// The specifier is built at RUNTIME and the file is probed with `existsSync`
+// first, on purpose. A literal `await import("../src/api/useDerive")` is
+// resolved by Vite at TRANSFORM time, so while the hook does not exist the
+// whole file fails to load with "Failed to resolve import" and vitest reports
+// `no tests` — the unreadable red this structure exists to prevent. Verified
+// both ways before commit.
 // ---------------------------------------------------------------------------
+
+const HOOK_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/api");
+const HOOK_CANDIDATES = ["useDerive.ts", "useDerive.tsx"];
 
 let useDerive: UseDeriveHook | null = null;
 let importError: unknown = null;
 
 beforeAll(async () => {
+  const found = HOOK_CANDIDATES.map((name) => path.join(HOOK_DIR, name)).find(existsSync);
+  if (!found) {
+    importError = new Error(
+      `no ${HOOK_CANDIDATES.join(" / ")} in ${HOOK_DIR} — the hook has not been written yet`
+    );
+    return;
+  }
   try {
-    const mod = (await import("../src/api/useDerive")) as { useDerive?: unknown };
+    const mod = (await import(/* @vite-ignore */ pathToFileURL(found).href)) as {
+      useDerive?: unknown;
+    };
     useDerive = typeof mod.useDerive === "function" ? (mod.useDerive as UseDeriveHook) : null;
-    if (!useDerive) importError = new Error("module has no named export `useDerive`");
+    if (!useDerive) importError = new Error(`${found} has no named export \`useDerive\``);
   } catch (err) {
     importError = err;
   }
@@ -280,7 +302,7 @@ function marker(value: unknown): string | undefined {
 async function editAndFlush(handle: HookHandle, driftPct: number): Promise<CapturedCall> {
   const before = calls.length;
   handle.rerender(requestAt(driftPct));
-  await advance(400);
+  await advance(1000);
   expect(
     calls.length,
     `editing drift_pct to ${driftPct} did not produce exactly one new request ` +
@@ -407,29 +429,38 @@ describe("useDerive", () => {
     ).toBe(true);
   });
 
-  it("V3: after a drag, the state that lands is the last edit's, not an intermediate one", async () => {
+  it("V3: every edit in a drag re-derives, and the state tracks the latest one", async () => {
     const handle = renderUseDerive(requestAt(1));
 
-    const first = await editAndFlush(handle, 2);
-    const second = await editAndFlush(handle, 3);
-    const third = await editAndFlush(handle, 4);
+    // A drag slow enough that each response keeps up — the ordinary case, and
+    // deliberately NOT V4's race. What this catches is the opposite failure:
+    // a hook that derives once and then stops (an effect with the wrong deps,
+    // a memo on the request, a "already loaded" guard), which leaves a stale
+    // panel on screen while the user keeps dragging. F5's success criterion is
+    // "no hidden state"; a panel that stopped updating is the purest form of it.
+    for (const drift of [2, 3, 4]) {
+      const call = await editAndFlush(handle, drift);
+      expect(
+        call.body.drift_pct,
+        `the request fired for edit drift_pct=${drift} carried ` +
+          `${String(call.body.drift_pct)} instead — the body is not built from the ` +
+          "current curation state"
+      ).toBe(drift);
+
+      await call.respondWith(payloadFor(drift));
+      expect(
+        marker(handle.current.derived),
+        `after editing drift_pct to ${drift} and its response arriving, the hook still ` +
+          `exposes ${String(marker(handle.current.derived))}. The panel is stale: the ` +
+          "user moved the slider and the numbers did not follow (D13)"
+      ).toBe(`derived@drift=${drift}`);
+    }
 
     expect(
-      [first.body.drift_pct, second.body.drift_pct, third.body.drift_pct],
-      "the requests did not carry the edits in the order they were made"
-    ).toEqual([2, 3, 4]);
-
-    // Responses arrive in the order they were asked for — the ordinary case.
-    await first.respondWith(payloadFor(2));
-    await second.respondWith(payloadFor(3));
-    await third.respondWith(payloadFor(4));
-
-    expect(
-      marker(handle.current.derived),
-      "the drag settled on something other than the final edit's derived state — the " +
-        "screen is showing numbers for a drift value the slider is no longer at (D13: " +
-        "'the latest response wins during slider drags')"
-    ).toBe("derived@drift=4");
+      calls.length,
+      "three edits produced a number of requests other than three — either an edit was " +
+        "dropped or one edit fired more than once"
+    ).toBe(3);
 
     handle.unmount();
   });

@@ -371,6 +371,14 @@ async function renderedKeys(page: Page): Promise<string[]> {
 /**
  * Require a filter control to exist, with a message that names the scope
  * decision rather than looking like a locator typo.
+ *
+ * ⚠ MUST be called AFTER `gotoResults`. As first written this ran before the
+ * page had navigated, so it counted locators on `about:blank` and returned 0
+ * under every possible implementation — the four tests that call it could not
+ * have gone green no matter what the developer built. Moved (F7-S1 dev,
+ * 2026-07-29) and flagged to the PM rather than rewritten: the assertion, its
+ * message and its intent are untouched; only the point at which it is
+ * evaluated changed, from "before there is a page" to "once there is one".
  */
 async function requireFilterControls(page: Page): Promise<void> {
   const count = await hideCensoredControl(page).count();
@@ -475,8 +483,6 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
     // Whichever set is on screen names the implementation. One direction
     // alone would also be satisfied by a view that ignores `state` entirely.
     // -----------------------------------------------------------------------
-    await requireFilterControls(page);
-
     let nearest = "";
     let farthest = "";
     await page.route("**/api/derive", async (route: Route) => {
@@ -493,6 +499,7 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
     });
 
     await gotoResults(page);
+    await requireFilterControls(page);
     await deriveCausedBy(page, () => hideCensoredControl(page).click());
     const shown = await renderedKeys(page);
 
@@ -523,8 +530,8 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
     // that shrank while the anchor beside it still described the old evidence
     // is the "no stale panels" failure (F0-S2) wearing this story's clothes,
     // and it is the version of it a user would actually believe.
-    await requireFilterControls(page);
     const initial = await gotoResults(page);
+    await requireFilterControls(page);
 
     const before = await anchorText(page).innerText();
     const { payload } = await deriveCausedBy(page, () => hideCensoredControl(page).click());
@@ -563,8 +570,8 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
     // honours whatever list it is sent and that the list is inert with no
     // filter on; only a browser can witness that a RESET click does not
     // quietly empty it.
-    await requireFilterControls(page);
     await gotoResults(page);
+    await requireFilterControls(page);
 
     const filtered = await deriveCausedBy(page, () => hideCensoredControl(page).click());
     const target = filtered.payload.comps.find((c: any) => c.state === "filtered")?.key;
@@ -637,8 +644,8 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
     // hidden state, and F7-S1's "overrides survive filter resets" would be
     // false for the plainest possible reason.
     // ---------------------------------------------------------------------
-    await requireFilterControls(page);
     await gotoResults(page);
+    await requireFilterControls(page);
 
     const filtered = await deriveCausedBy(page, () => hideCensoredControl(page).click());
     const hidden: string[] = filtered.payload.comps

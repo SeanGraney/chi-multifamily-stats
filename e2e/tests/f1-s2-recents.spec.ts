@@ -145,6 +145,13 @@ test.beforeAll(async () => {
     RENTCOMP_HOME: rentcompHome,
     RENTCOMP_FIXTURES_DIR: fixturesDir,
     RENTCOMP_LIVE: "", // never live (D17)
+    // Serve the build THIS spec just made. `app.py::_ui_dist_dir()` resolves
+    // repo-relative from the installed package, which under a worktree (or a
+    // runner that exported RENTCOMP_UI_DIR for someone else's benefit) is a
+    // different, possibly stale `frontend/dist` — and a stale bundle renders a
+    // page these locators then race, which is how this spec first reported a
+    // NEW SEARCH button that does not exist in any source file.
+    RENTCOMP_UI_DIR: FRONTEND_DIST,
   };
 
   try {
@@ -178,6 +185,20 @@ test.afterAll(() => {
 
 function skipIfSetupFailed() {
   test.skip(!!setupFailure, setupFailure ?? "");
+}
+
+/**
+ * Load Home and wait for the app to actually mount.
+ *
+ * `page.goto` resolves on the document, not on React. Asserting straight after
+ * it reads a half-built DOM, and an absence assertion ("no recents table") is
+ * then trivially and wrongly true. The top bar is F0-S1b's pinned, always-
+ * present element, so it is the honest "the app is up" signal.
+ */
+async function gotoHome(page: Page): Promise<void> {
+  await page.goto(BASE_URL + "/");
+  await expect(page.locator("[data-testid='top-bar']").or(page.getByRole("banner")).first())
+    .toBeVisible({ timeout: 15_000 });
 }
 
 /** Locators try a testid, then a role, then text — no markup F1-S1 has not chosen yet is pinned. */
@@ -224,7 +245,7 @@ test.describe("F1 · Home", () => {
       300,
     );
 
-    await page.goto(BASE_URL + "/");
+    await gotoHome(page);
     await expect(recentsTable(page).first()).toBeVisible({ timeout: 10_000 });
     // Order only — the values in the row are pinned at L2.
     const text = await recentsTable(page).first().innerText();
@@ -238,7 +259,7 @@ test.describe("F1 · Home", () => {
       300,
     );
 
-    await page.goto(BASE_URL + "/");
+    await gotoHome(page);
     const derivePromise = page.waitForResponse(
       (res) => res.url().includes("/api/derive") && res.request().method() === "POST",
       { timeout: 15_000 },
@@ -262,7 +283,7 @@ test.describe("F1 · Home", () => {
     const listed = await (await fetch(`${BASE_URL}/api/workspaces`)).json();
     test.skip(Array.isArray(listed) && listed.length > 0, "a previous test saved a workspace");
 
-    await page.goto(BASE_URL + "/");
+    await gotoHome(page);
     await expect(recentsTable(page)).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: /new search/i }).or(page.getByRole("link", { name: /new search/i })),
@@ -281,7 +302,7 @@ test.describe("F1 · Home", () => {
     expect(file, `no workspace file for ${refs[0]} under ${dir}`).toBeTruthy();
     writeFileSync(path.join(dir, file as string), "{ not json", "utf-8");
 
-    await page.goto(BASE_URL + "/");
+    await gotoHome(page);
     const row = recentRows(page).filter({ hasText: /error|could not|unreadable|broken/i });
     await expect(row.first()).toBeVisible({ timeout: 10_000 });
     await expect(

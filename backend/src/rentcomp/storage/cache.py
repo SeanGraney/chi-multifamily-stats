@@ -65,6 +65,7 @@ from pathlib import Path
 from rentcomp.storage import rentcomp_home
 
 __all__ = [
+    "CORRUPT_MANIFEST_ERRORS",
     "CacheMissError",
     "Manifest",
     "QueryStatus",
@@ -74,6 +75,21 @@ __all__ = [
     "write_manifest",
     "write_raw_response",
 ]
+
+#: What `read_manifest` raises when an entry EXISTS but cannot be read back as a
+#: manifest — as opposed to `CacheMissError`, which means there is no entry.
+#:
+#: Defined here, beside the function that raises them, and imported by every
+#: caller rather than re-spelled at each `except`. Two routes need this list
+#: (`api/search.py` must refuse a corrupt entry loudly; `api/plan.py` must
+#: degrade to `miss` quietly) and they were widened out of step once already:
+#: both shipped `(OSError, ValueError, KeyError)`, which covers breakage in the
+#: manifest's *values* and misses breakage in its *types* —
+#: `payload["as_of"]` on a non-mapping and `tuple(5)` raise `TypeError`, and a
+#: `queries` list of non-records reaches `_query_status` where `.get` raises
+#: `AttributeError`. Both surfaced as a 500. One name, so the next shape that
+#: needs adding is added once and both routes get it.
+CORRUPT_MANIFEST_ERRORS = (OSError, ValueError, KeyError, AttributeError, TypeError)
 
 
 class CacheMissError(LookupError):

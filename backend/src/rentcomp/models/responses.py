@@ -49,6 +49,7 @@ __all__ = [
     "Breakdown",
     "BucketStat",
     "CohortCount",
+    "CohortPlan",
     "CohortStat",
     "CurveResult",
     "Cut",
@@ -65,6 +66,7 @@ __all__ = [
     "PartialPullInfo",
     "PriceTest",
     "RecentWorkspace",
+    "SearchPlan",
     "SearchResult",
     "Workspace",
 ]
@@ -487,6 +489,56 @@ class SearchResult(BaseModel):
     #: be named rather than merely counted (D24 §5a).
     missing: list[str]
     calls_to_complete: int
+
+
+class CohortPlan(BaseModel):
+    """One cohort year in a planned pull, and whether it can be fetched.
+
+    `fetchable` is false for a window that has not opened yet — the planner
+    emits it anyway, and so does this, because "silently absent" and "planned
+    but empty" are different things to a user checking whether their date
+    window is the one they meant (`client/planner.py`). It costs nothing, so
+    it is never billed either (F4-S1 AC4).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    year: int
+    fetchable: bool
+
+
+class SearchPlan(BaseModel):
+    """What `POST /api/search/plan` answers (F2-S3) — the cost of a search,
+    before anyone has agreed to pay it.
+
+    Spec §6.3's preview line, as data: *"Jun 15–30 · 2026, 2025 (2 cohorts) ·
+    est. N API calls."* Every part of that sentence is a backend fact here,
+    including the cohort years — D5/D13 make the SPA a renderer, and a frontend
+    reconstructing the year set by subtracting from `new Date()` would be a
+    second implementation of the planner's calendar rules.
+
+    Deliberately the same field *names* as the overlapping half of
+    `SearchResult`, because they are the same facts about the same search: a
+    preview whose `estimated_calls` or `pull_ref` did not match the submit's
+    would be worse than no preview at all.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: F3-S1's cache key for these params — what the form hands to F3-S2's
+    #: modal and, after submit, to `POST /api/derive`. Identical to the ref
+    #: `POST /api/search` resolves for the same body.
+    pull_ref: str
+    #: `miss` (nothing on disk), `hit` (a whole pull), `stale` (an entry with
+    #: a gap). This is what lets the form route to the cache modal on submit
+    #: without asking the route that pulls.
+    cache_status: Literal["hit", "miss", "stale"]
+    #: `len(fetchable_queries(plan))` — the F2-S3 [INVARIANT] number, counted
+    #: by the same function `client/pull.py` spends against. Nothing was
+    #: fetched to compute it and nothing ever will be.
+    estimated_calls: int
+    #: One entry per `years_back`, newest first.
+    cohorts: list[CohortPlan]
 
 
 class Workspace(BaseModel):

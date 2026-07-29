@@ -16,8 +16,11 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from rentcomp.api.config import router as config_router
 from rentcomp.api.derive import router as derive_router
+from rentcomp.api.plan import router as plan_router
 from rentcomp.api.search import router as search_router
+from rentcomp.api.settings import router as settings_router
 from rentcomp.api.workspaces import router as workspaces_router
 
 #: Env var that overrides where the built frontend is looked up. Used by
@@ -57,6 +60,13 @@ def create_app() -> FastAPI:
     app.include_router(derive_router)
     app.include_router(search_router)
     app.include_router(workspaces_router)
+    # F2-S3's non-spending preview. A separate module from `search_router` on
+    # purpose (`api/plan.py`): the guarantee that a live-updating form cannot
+    # buy anything is carried by that module's import list, and merging the two
+    # would put `run_pull` back within reach of the preview handler.
+    app.include_router(plan_router)
+    app.include_router(config_router)
+    app.include_router(settings_router)
 
     dist = _ui_dist_dir()
     if dist.is_dir():

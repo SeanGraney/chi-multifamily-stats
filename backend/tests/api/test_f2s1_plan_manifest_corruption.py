@@ -38,8 +38,9 @@ time. The user's route out is F2 step 4: submit anyway, at which point
 MONEY — THE INVARIANT THAT MUST HOLD FOR *EVERY* SHAPE, BROKEN OR NOT
 -----------------------------------------------------------------------
 `test_no_shape_of_corrupt_manifest_lets_the_preview_spend` is the load-bearing
-test in this file and it is asserted unconditionally, for all nine shapes,
-including the ones whose status code is xfailed. F2-S3's [INVARIANT] is about
+test in this file and it is asserted unconditionally, for all nine shapes —
+including, while they were xfailed, the five whose status code was not.
+Unconditional then, unchanged now. F2-S3's [INVARIANT] is about
 the *count*; the structural guarantee behind it is that the preview cannot buy
 anything however its inputs or its disk are shaped. Proven structurally (the
 raw responses on disk are byte-identical afterwards and no new cache entry
@@ -211,7 +212,7 @@ def corrupted(http, seeded, rentcomp_home, clear_caches):
 
 
 # ===========================================================================
-# 1. MONEY — unconditional, every shape, including the xfailed ones
+# 1. MONEY — unconditional, every shape, whatever its status code
 # ===========================================================================
 
 
@@ -291,8 +292,11 @@ def test_the_estimate_survives_a_corrupt_manifest_when_the_status_does(
     """Whatever `cache_status` resolves to, the *count* must still be the
     planner's — F2-S3's [INVARIANT] does not have an exception for a bad disk.
 
-    Skipped-by-assertion rather than xfailed: for the shapes that 500 there is
-    no body to check, and asserting on one would be asserting on the defect.
+    Written as skip-by-assertion rather than xfail, for the shapes that 500ed:
+    there was no body to check, and asserting on one would have been asserting
+    on the defect. The guard below is inert now that all nine return 200 — kept
+    because what it guards against is a *status* regression, which the test
+    above already owns and this one should not duplicate.
     """
     corrupted(shape)
     response = http.post(PLAN_PATH, json=SEARCH_BODY)

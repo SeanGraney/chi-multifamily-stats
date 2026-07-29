@@ -462,6 +462,8 @@ export interface components {
       censored: boolean;
       /** Removal Class */
       removal_class: ("pending" | "provisional" | "confirmed") | null;
+      /** Days Since Removal */
+      days_since_removal: number | null;
       /** Withdrawal Suspect */
       withdrawal_suspect: boolean;
       /** Sqft Suspect */

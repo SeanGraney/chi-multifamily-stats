@@ -29,8 +29,8 @@
  * So they are written test-first and marked `test.fail()` — Playwright's strict
  * xfail: the run fails if one of them PASSES, which forces the marker off the
  * day F1-S1 lands rather than letting the coverage quietly rot into a comment.
- * The QA of F1-S1 inherits this file: remove the four `test.fail()` calls, and
- * it is that story's acceptance spec.
+ * The QA of F1-S1 inherits this file: remove the three remaining `test.fail()`
+ * calls, and it is that story's acceptance spec.
  *
  * `the app serves Home at all` is deliberately UNMARKED. Without it a broken
  * harness (no build, no server, wrong port) would render every `test.fail()`
@@ -240,7 +240,50 @@ test.describe("F1 · Home", () => {
   });
 
   // =========================================================================
-  // F1-S1's four rows — expected to fail until the Home view exists
+  // the empty-state row runs FIRST, deliberately
+  // -------------------------------------------------------------------------
+  // It is the only row whose precondition is "nothing has been saved yet", and
+  // three of the rows below save a workspace as their arrange step. Ordering it
+  // first is what makes that precondition a fact rather than a hope.
+  //
+  // Found by F1-S2's QA on verify (2026-07-29): it previously sat fourth behind
+  // a `test.skip(listed.length > 0)` guard and passed only because Playwright
+  // restarts the worker after a failing test, handing it a fresh RENTCOMP_HOME
+  // by accident. The three `test.fail()` rows are what produce those failures —
+  // so **the day F1-S1 lands and the markers come off, the worker stops
+  // restarting and this row would have silently SKIPPED**, exiting 0 having
+  // verified nothing: the exact false green this file's header forbids. Moved
+  // up and the conditional skip replaced with an assertion, so the precondition
+  // is now stated out loud and fails if it is ever untrue.
+  // =========================================================================
+
+  test("with no recents the table is hidden and NEW SEARCH is the only path", async ({ page }) => {
+    skipIfSetupFailed();
+    // `test.fail()` REMOVED by F1-S2's developer (disclosed to QA via the PM,
+    // and verified on QA's verify pass). The marker was written against main at
+    // 86a9286, where Home was still the F0-S1b scaffold; **F2-S1 shipped the
+    // NEW SEARCH button** (`Home.tsx:49`) before F1-S2 was dispatched, so both
+    // halves of this row are now genuinely satisfied — no recents table (still
+    // F1-S1's) and a visible NEW SEARCH. The strict marker did exactly its job:
+    // it went red the day the gap closed and demanded its own removal rather
+    // than decaying into a comment. The other three markers in this file stay —
+    // the recents TABLE is F1-S1's.
+    const listed = await (await fetch(`${BASE_URL}/api/workspaces`)).json();
+    expect(
+      listed,
+      "this row must run against an empty workspace store; it is ordered first for exactly " +
+        "that reason, so a non-empty store means something above it started saving",
+    ).toEqual([]);
+
+    await gotoHome(page);
+    await expect(recentsTable(page)).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /new search/i }).or(page.getByRole("link", { name: /new search/i })),
+    ).toBeVisible();
+  });
+
+  // =========================================================================
+  // F1-S1's three rows — expected to fail until the Home view exists
   // =========================================================================
 
   test("the recents table lists the saved searches, newest first", async ({ page }) => {
@@ -279,28 +322,6 @@ test.describe("F1 · Home", () => {
     await expect(page.locator("[data-testid='comp-row']").or(page.getByRole("row")).first()).toBeVisible({
       timeout: 10_000,
     });
-  });
-
-  test("with no recents the table is hidden and NEW SEARCH is the only path", async ({ page }) => {
-    skipIfSetupFailed();
-    // `test.fail()` REMOVED by F1-S2's developer (disclosed to QA via the PM).
-    // The marker was written against main at 86a9286, where Home was still the
-    // F0-S1b scaffold; **F2-S1 shipped the NEW SEARCH button** (`Home.tsx:49`)
-    // before F1-S2 was dispatched, so both halves of this row are now genuinely
-    // satisfied — no recents table (still F1-S1's) and a visible NEW SEARCH.
-    // The strict marker did exactly its job: it went red the day the gap closed
-    // and demanded its own removal rather than decaying into a comment. The
-    // other three markers in this file stay — the recents TABLE is F1-S1's.
-    // Nothing saved in this test's run order-independent state: assert on a
-    // Home whose store is empty by asking the API first.
-    const listed = await (await fetch(`${BASE_URL}/api/workspaces`)).json();
-    test.skip(Array.isArray(listed) && listed.length > 0, "a previous test saved a workspace");
-
-    await gotoHome(page);
-    await expect(recentsTable(page)).toHaveCount(0);
-    await expect(
-      page.getByRole("button", { name: /new search/i }).or(page.getByRole("link", { name: /new search/i })),
-    ).toBeVisible();
   });
 
   test("a corrupt workspace renders as an error row offering refresh", async ({ page }) => {

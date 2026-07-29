@@ -51,7 +51,16 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { buildUi, fixture, serveUi, stubApi, type ApiCall, type StaticUi } from "./support/static-ui";
 
-test.describe.configure({ mode: "serial" });
+/**
+ * NO `test.describe.configure({ mode: "serial" })`. It was here and it is
+ * removed deliberately (PM ruling, F4-S6): serial mode bails the rest of the
+ * describe after the first failure, so eight independent red tests report as
+ * `1 failed, 7 did not run` — and "did not run" is the same family as the
+ * silent skip this repo has been burned by four times. The suite is already
+ * sequential (`playwright.config.ts`: `workers: 1, fullyParallel: false`), so
+ * serial mode bought nothing but the loss of signal. Every test below arranges
+ * its own stub and its own navigation; none depends on another's state.
+ */
 
 let ui: StaticUi | null = null;
 let setupFailure: string | null = null;
@@ -144,19 +153,32 @@ async function submitSearch(page: Page, values: Record<string, string>): Promise
  * user there straight off a search (F4 flow step 4) or leave Results reachable
  * from the top bar; either satisfies this story, so the helper accepts both
  * rather than pinning a navigation decision the AC does not make.
+ *
+ * `expectedRef` is not optional, deliberately. "A derive happened" is not the
+ * precondition these tests need — "a derive *of the pull this search produced*
+ * happened" is. The weaker version certifies the broken seam as working (see
+ * `ApiStub.deriveOnlyRef`), so the ref travels with every call site.
  */
-async function openWorkspace(page: Page, calls: ApiCall[]): Promise<void> {
-  const derivedAlready = () => calls.some((call) => call.path.endsWith("/api/derive"));
-  for (let waited = 0; waited < 3000 && !derivedAlready(); waited += 250) {
+async function openWorkspace(page: Page, calls: ApiCall[], expectedRef: string): Promise<void> {
+  const derives = () => calls.filter((call) => call.path.endsWith("/api/derive"));
+  for (let waited = 0; waited < 3000 && derives().length === 0; waited += 250) {
     await page.waitForTimeout(250);
   }
-  if (!derivedAlready()) await page.getByTestId("nav-results").click();
+  if (derives().length === 0) await page.getByTestId("nav-results").click();
   await expect
-    .poll(derivedAlready, {
+    .poll(() => derives().length > 0, {
       timeout: 10_000,
       message: "no POST /api/derive was ever issued, so no derived state is on screen",
     })
     .toBe(true);
+
+  const refs = [...new Set(derives().map((call) => call.body?.pull_ref))];
+  expect(
+    refs,
+    `this view derived ${JSON.stringify(refs)} but the only pull the user created in this ` +
+      `test is ${JSON.stringify(expectedRef)}. Every number now on screen was computed from ` +
+      "evidence the user never asked for (F4 flow step 4; PM's +1 AC on this story).",
+  ).toEqual([expectedRef]);
 }
 
 // ===========================================================================
@@ -180,6 +202,7 @@ test("AC1a: a pull in flight shows pipeline progress naming its phases", async (
     search: SEARCH_COMPLETE,
     searchDelayMs: 4000,
     derive: DERIVE_COMPLETE,
+    deriveOnlyRef: SEARCH_COMPLETE.pull_ref,
   });
   await page.goto(baseUrl());
   await submitSearch(page, { ...NARROW, address: "3651 S Wood St, Chicago, IL 60609" });
@@ -221,6 +244,7 @@ test("AC1b: the years in the progress surface come from the plan, not from a clo
     search: SEARCH_COMPLETE,
     searchDelayMs: 4000,
     derive: DERIVE_COMPLETE,
+    deriveOnlyRef: SEARCH_COMPLETE.pull_ref,
   });
   await page.goto(baseUrl());
   await submitSearch(page, { ...NARROW, address: "3651 S Wood St, Chicago, IL 60609" });
@@ -247,10 +271,11 @@ test("AC2a: a search that found nothing renders an empty state, not zeroed panel
     plan: PLAN,
     search: SEARCH_ZERO,
     derive: DERIVE_EMPTY,
+    deriveOnlyRef: SEARCH_ZERO.pull_ref,
   });
   await page.goto(baseUrl());
   await submitSearch(page, NARROW);
-  await openWorkspace(page, calls);
+  await openWorkspace(page, calls, SEARCH_ZERO.pull_ref);
 
   const empty = await firstVisible(
     byTestIdOrText(page, ["empty-state"], /no comps|0 comps|nothing (came )?back|found nothing/i),
@@ -276,10 +301,15 @@ test("AC2a: a search that found nothing renders an empty state, not zeroed panel
 });
 
 test("AC2b: the empty state names the constraints that produced it", async ({ page }) => {
-  const calls = await stubApi(page, { plan: PLAN, search: SEARCH_ZERO, derive: DERIVE_EMPTY });
+  const calls = await stubApi(page, {
+    plan: PLAN,
+    search: SEARCH_ZERO,
+    derive: DERIVE_EMPTY,
+    deriveOnlyRef: SEARCH_ZERO.pull_ref,
+  });
   await page.goto(baseUrl());
   await submitSearch(page, NARROW);
-  await openWorkspace(page, calls);
+  await openWorkspace(page, calls, SEARCH_ZERO.pull_ref);
 
   const empty = await firstVisible(
     byTestIdOrText(
@@ -314,10 +344,15 @@ test("AC2b: the empty state names the constraints that produced it", async ({ pa
 });
 
 test("AC3: a widen shortcut actually widens the search", async ({ page }) => {
-  const calls = await stubApi(page, { plan: PLAN, search: SEARCH_ZERO, derive: DERIVE_EMPTY });
+  const calls = await stubApi(page, {
+    plan: PLAN,
+    search: SEARCH_ZERO,
+    derive: DERIVE_EMPTY,
+    deriveOnlyRef: SEARCH_ZERO.pull_ref,
+  });
   await page.goto(baseUrl());
   await submitSearch(page, NARROW);
-  await openWorkspace(page, calls);
+  await openWorkspace(page, calls, SEARCH_ZERO.pull_ref);
 
   const widen = await firstVisible([
     page.getByTestId("widen-radius"),
@@ -383,10 +418,11 @@ test("AC4: a partial pull still renders its evidence — usable, not blocked", a
     plan: PLAN,
     search: SEARCH_PARTIAL,
     derive: DERIVE_PARTIAL,
+    deriveOnlyRef: SEARCH_PARTIAL.pull_ref,
   });
   await page.goto(baseUrl());
   await submitSearch(page, { ...NARROW, address: "3651 S Wood St, Chicago, IL 60609" });
-  await openWorkspace(page, calls);
+  await openWorkspace(page, calls, SEARCH_PARTIAL.pull_ref);
 
   // §5a: "an incomplete first pull is usable, with the gap named loudly."
   // With a 50-call cap, refusing to show anything until the set is perfect
@@ -404,10 +440,11 @@ test("AC5: the gap is named precisely — the window AND the call count", async 
     plan: PLAN,
     search: SEARCH_PARTIAL,
     derive: DERIVE_PARTIAL,
+    deriveOnlyRef: SEARCH_PARTIAL.pull_ref,
   });
   await page.goto(baseUrl());
   await submitSearch(page, { ...NARROW, address: "3651 S Wood St, Chicago, IL 60609" });
-  await openWorkspace(page, calls);
+  await openWorkspace(page, calls, SEARCH_PARTIAL.pull_ref);
 
   const banner = await firstVisible(
     byTestIdOrText(page, ["partial-pull", "pull-gap"], /missing|incomplete|to complete/i),
@@ -451,10 +488,11 @@ test("AC5/AC7: the call count is the server's number, not the length of the miss
     plan: PLAN,
     search: SEARCH_PARTIAL,
     derive: DERIVE_DIVERGENT,
+    deriveOnlyRef: SEARCH_PARTIAL.pull_ref,
   });
   await page.goto(baseUrl());
   await submitSearch(page, { ...NARROW, address: "3651 S Wood St, Chicago, IL 60609" });
-  await openWorkspace(page, calls);
+  await openWorkspace(page, calls, SEARCH_PARTIAL.pull_ref);
 
   const banner = await firstVisible(
     byTestIdOrText(page, ["partial-pull", "pull-gap"], /missing|incomplete|to complete/i),
@@ -482,10 +520,11 @@ test("AC5 control: a complete pull shows no gap banner", async ({ page }) => {
     plan: PLAN,
     search: SEARCH_COMPLETE,
     derive: DERIVE_COMPLETE,
+    deriveOnlyRef: SEARCH_COMPLETE.pull_ref,
   });
   await page.goto(baseUrl());
   await submitSearch(page, { ...NARROW, address: "3651 S Wood St, Chicago, IL 60609" });
-  await openWorkspace(page, calls);
+  await openWorkspace(page, calls, SEARCH_COMPLETE.pull_ref);
 
   await expect(page.getByTestId("comp-row").first()).toBeVisible({ timeout: 10_000 });
   const banner = await firstVisible(
@@ -507,10 +546,11 @@ test("AC6: the gap banner offers a resume that asks to finish, not to re-buy", a
     plan: PLAN,
     search: SEARCH_PARTIAL,
     derive: DERIVE_PARTIAL,
+    deriveOnlyRef: SEARCH_PARTIAL.pull_ref,
   });
   await page.goto(baseUrl());
   await submitSearch(page, { ...NARROW, address: "3651 S Wood St, Chicago, IL 60609" });
-  await openWorkspace(page, calls);
+  await openWorkspace(page, calls, SEARCH_PARTIAL.pull_ref);
 
   const resume = await firstVisible([
     page.getByTestId("resume-pull"),

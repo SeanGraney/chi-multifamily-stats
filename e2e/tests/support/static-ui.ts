@@ -119,6 +119,27 @@ export interface ApiStub {
   derive?: unknown | ((body: any) => unknown);
   /** Milliseconds to hold `POST /api/search` open, to make "in flight" real. */
   searchDelayMs?: number;
+  /**
+   * The ONLY `pull_ref` this stub will derive. A `POST /api/derive` for any
+   * other ref gets a 404 — the same status the real route returns for a ref it
+   * cannot resolve (`api/derive.py`: `PullNotFoundError` -> 404).
+   *
+   * WHY THIS DEFAULTS ON, AND WHY IT IS IN THE HARNESS RATHER THAN IN ONE TEST
+   * -------------------------------------------------------------------------
+   * Without it every test in this file is satisfiable by a view that derives
+   * the WRONG pull. A stub that answers the same payload to any body will hand
+   * a gap banner, a comp list and an anchor to a `Results` view holding a
+   * hardcoded fixture ref — so the spec goes green while the screen shows the
+   * analysis of evidence the user never searched for. That is the exact
+   * failure NORTH_STAR exists to prevent (a confident output the evidence does
+   * not support), and it is live on `main` today: `Results.tsx` holds
+   * `const PULL_REF = "ws1-real"` and derives it unconditionally.
+   *
+   * Putting the check here rather than in a single test is the point. One test
+   * would prove the seam is wired; this makes it impossible for any *other*
+   * test in the file to accidentally certify the broken wiring as working.
+   */
+  deriveOnlyRef?: string;
 }
 
 export interface ApiCall {
@@ -172,6 +193,21 @@ export async function stubApi(page: Page, stub: ApiStub): Promise<ApiCall[]> {
       return;
     }
     if (pathname.endsWith("/api/derive") && stub.derive !== undefined) {
+      if (stub.deriveOnlyRef !== undefined && body?.pull_ref !== stub.deriveOnlyRef) {
+        // Not an error in the harness — this IS the assertion. See
+        // `ApiStub.deriveOnlyRef`.
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail:
+              `no pull named ${JSON.stringify(body?.pull_ref)}. This browser derived a ref ` +
+              `the user never searched for; the only ref this test supplied is ` +
+              `${JSON.stringify(stub.deriveOnlyRef)}.`,
+          }),
+        });
+        return;
+      }
       await send(resolve(stub.derive, body));
       return;
     }

@@ -315,10 +315,13 @@ test.describe("F5-S2 — curation controls drive the derive", () => {
     ).toBe(0);
 
     const all = await deriveCausedBy(page, () => bulkButton(page, "all").click());
-    // Scoped to comps that HAVE a $/sqft: whether ALL should also re-include
-    // the no-sqft comps (which default to weight 0, F5 epic edge) is an open
-    // question escalated to the PM, and this spec deliberately does not
-    // pre-judge it.
+    // Scoped to comps that HAVE a $/sqft. When this test was written, whether
+    // ALL should also re-include the no-sqft comps (which default to weight 0,
+    // F5 epic edge) was an open question escalated to the PM, so this
+    // deliberately did not pre-judge it. The PM has since ruled and QUEUE.md
+    // row 23 records the ruling; AC2c below now asserts it in BOTH directions.
+    // This scoping stays exactly as it is — it is what makes AC2c's carve-out
+    // an addition rather than a contradiction.
     const withPsf = initial.comps.filter((c: any) => c.psf !== null).map((c: any) => c.key);
     const notRestored = withPsf.filter((k: string) => (all.body.weights?.[k] ?? 0) <= 0);
     expect(
@@ -329,6 +332,126 @@ test.describe("F5-S2 — curation controls drive the derive", () => {
       all.payload.breakdown.included,
       "after ALL the server counts nothing as included"
     ).toBeGreaterThan(0);
+  });
+
+  test("AC2c: ALL preserves a manual override of a no-sqft comp; NONE zeroes it", async ({
+    page,
+  }) => {
+    // -----------------------------------------------------------------------
+    // ⚠ THIS TEST PINS AN ASYMMETRY ON PURPOSE. DO NOT "FIX" IT.
+    //
+    // QUEUE.md row 23: ALL and NONE are deliberately NOT inverses.
+    //
+    //   ALL  writes weight 1 only where `psf !== null`, so a manual
+    //        re-include of a no-sqft comp SURVIVES a bulk sweep. The F5 epic
+    //        says no-sqft comps are "excluded by default, **manual**
+    //        re-include allowed" — and a bulk sweep is not a manual act. It
+    //        also stops a comp that contributes nothing to the anchor from
+    //        silently acquiring a contribution share.
+    //   NONE zeroes everything visible, INCLUDING that override, because
+    //        "deselect everything I can see" has no ambiguous cases.
+    //
+    // The consequence, stated plainly so nobody discovers it as a "bug":
+    // after NONE→ALL a no-sqft re-include is gone permanently until the user
+    // redoes it by hand. Each half was judged individually right; the pair is
+    // not symmetric and is not meant to be.
+    //
+    // Row 14b exists because F5-S2's AC2 asserted this in NEITHER direction —
+    // a rule with a written-down rationale and no test is one refactor away
+    // from being tidied into symmetry by someone acting in good faith.
+    // -----------------------------------------------------------------------
+
+    // The `ws1-real` pull is not guaranteed to contain a comp with no sqft,
+    // and a test that silently does nothing when it doesn't is worse than no
+    // test. So one comp is MADE no-sqft on every derive response — the same
+    // route-rewriting technique AC3 uses, and the reason it is honest here is
+    // that the rule under test is a CLIENT rule ("ALL skips comps whose psf
+    // is null"), so the payload is exactly the right place to state the
+    // precondition. `state` and `weight` are rewritten alongside `psf` so the
+    // row starts where a real no-sqft comp starts: visible, at weight 0.
+    let noSqftKey = "";
+    await page.route("**/api/derive", async (route: Route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      // Chosen by a rule, not by call order, so every response in this test
+      // carves out the SAME comp.
+      noSqftKey = payload.comps
+        .map((c: any) => c.key)
+        .sort()
+        .at(0);
+      const comp = payload.comps.find((c: any) => c.key === noSqftKey);
+      comp.psf = null;
+      comp.weight = 0;
+      comp.state = "excluded";
+      comp.contribution_share = null;
+      await route.fulfill({ response, json: payload });
+    });
+
+    const initial = await gotoResults(page);
+    expect(noSqftKey, "the route interception never ran").not.toBe("");
+
+    const withPsf: string[] = initial.comps
+      .filter((c: any) => c.psf !== null)
+      .map((c: any) => c.key);
+    expect(
+      withPsf.length,
+      "every comp came back without a $/sqft, so ALL would sweep nothing and this test " +
+        "would pass vacuously"
+    ).toBeGreaterThan(0);
+
+    const row = rowFor(page, noSqftKey);
+    await expect(row, `no rendered row for the no-sqft comp ${noSqftKey}`).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(
+      toggleIn(row),
+      "a comp with no $/sqft rendered as included — it cannot contribute to a $/sqft-based " +
+        "anchor, so it starts excluded (F5 epic edge) and is opt-in"
+    ).not.toBeChecked();
+
+    // The MANUAL re-include, at a weight ALL would never write. ALL writes 1;
+    // this writes 2, so "ALL left it alone" and "ALL overwrote it" are
+    // distinguishable rather than coincidentally equal.
+    const override = await deriveCausedBy(page, async () => {
+      await weightIn(row).fill("2");
+      await weightIn(row).blur();
+    });
+    expect(
+      override.body.weights?.[noSqftKey],
+      "manually setting a weight on a no-sqft comp did not reach the request — a no-sqft " +
+        "comp must still be re-includable by hand"
+    ).toBe(2);
+
+    // --- ALL: sweeps the selectable comps, and leaves the override standing.
+    const all = await deriveCausedBy(page, () => bulkButton(page, "all").click());
+    const notSwept = withPsf.filter((k) => (all.body.weights?.[k] ?? 0) <= 0);
+    expect(
+      notSwept.slice(0, 5),
+      `ALL left ${notSwept.length} comps that DO have a $/sqft at weight 0 — the sweep did ` +
+        "not happen, so the assertion below would pass for the wrong reason"
+    ).toEqual([]);
+    expect(
+      all.body.weights?.[noSqftKey],
+      `ALL overwrote a manual re-include of a no-sqft comp (it is now ` +
+        `${String(all.body.weights?.[noSqftKey])}, was 2). ALL means "select what is ` +
+        'selectable by default"; a no-sqft comp is not selectable by default (F5 epic: ' +
+        '"excluded by default, MANUAL re-include allowed"), and a bulk sweep is not a ' +
+        "manual act. QUEUE.md row 23: this is deliberate, not a missing case"
+    ).toBe(2);
+
+    // --- NONE: deselects everything visible, override included.
+    const none = await deriveCausedBy(page, () => bulkButton(page, "none").click());
+    expect(
+      none.body.weights?.[noSqftKey],
+      `NONE left the no-sqft comp at ${String(none.body.weights?.[noSqftKey])}. NONE means ` +
+        '"deselect everything I can see" — there is no ambiguity to protect here, and a ' +
+        "comp still carrying weight after the user pressed NONE is hidden state, which is " +
+        "the one thing the F5 flow is explicitly against"
+    ).toBe(0);
+    expect(
+      none.payload.breakdown.included,
+      "after NONE the server still counts comps as included"
+    ).toBe(0);
   });
 
   test("AC2b: ALL/NONE leave filtered-out comps' weights untouched", async ({ page }) => {

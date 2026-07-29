@@ -801,14 +801,16 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
     // still refuses to let the override itself select anything, which
     // `test_an_override_does_not_override_the_weight` pins unchanged at L2.
     // ---------------------------------------------------------------------
-    await gotoResults(page);
-    await requireFilterControls(page);
-
     // One comp is MADE no-sqft on every response, and additionally made
     // filtered-and-weight-0 until the INCLUDE is clicked. After that its state
     // comes from the server, so when ALL/NONE run it is a genuinely VISIBLE
     // no-sqft comp — which is the only configuration that tests row 23 rather
     // than passing because the comp was still hidden.
+    //
+    // The route is installed BEFORE navigating, not after with a `reload()`:
+    // `gotoResults` reaches Results by clicking through from Home, so a reload
+    // lands back on Home and there are no comp rows at all. (QA's own bug,
+    // caught by the verify run.)
     let noSqftKey = "";
     let stillHidden = true;
     await page.route("**/api/derive", async (route: Route) => {
@@ -825,8 +827,8 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
       await route.fulfill({ response, json: payload });
     });
 
-    await page.reload();
-    await expect(rows(page).first()).toBeVisible({ timeout: 20_000 });
+    await gotoResults(page);
+    await requireFilterControls(page);
     expect(noSqftKey, "the route interception never ran").not.toBe("");
 
     await expandFilteredFooter(page);

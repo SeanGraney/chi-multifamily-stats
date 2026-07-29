@@ -64,7 +64,7 @@ Small on purpose. Every runtime dependency is one more thing that can break a to
 
 **Frontend runtime:** `react` · `react-dom` · `leaflet` + `react-leaflet` · `tailwindcss`
 
-**Frontend dev-only:** `vite` · `typescript` · `openapi-typescript` (D12) · `@playwright/test`
+**Frontend dev-only:** `vite` · `typescript` · `openapi-typescript` (D12) · `@playwright/test` · `vitest` + `jsdom` (D23's single `useDerive` file — the gate's middle leg, §8 "Layer 2.5"; added F5-S2. Deliberately *not* `@testing-library/*`: D23 rules out an RTL suite and React 18.3 exports `act` itself, so a ~25-line `renderHook` needs nothing further)
 
 Note on numpy: at n≈40 it is a *convenience*, not a performance requirement — pure Python `sorted` + `itertools.accumulate` would compute every statistic we have. It earns its place by making the stats code read like the formulas in the spec and by speaking the same array types as `lifelines` during verification. If it ever becomes a packaging problem, it is removable without redesign.
 

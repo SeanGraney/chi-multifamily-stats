@@ -354,9 +354,10 @@ def test_anchor_carries_the_drift_band_and_the_fixed_sensitivity(derive) -> None
 
 
 def test_cohorts_report_thinness_and_their_basis(derived) -> None:
-    """F4-S4: a thin cohort falls back and says so. What is pinned here is
+    """F4-S5: a thin cohort falls back and says so. What is pinned here is
     that the flag and the basis are reported at all — the threshold behaviour
-    is F4-S4's."""
+    is F4-S5's, walked in ``test_f4s5_premium_basis.py`` and
+    ``test_f4s5_cohort_fallback.py``."""
     assert derived["cohorts"], "no cohort stats in the response"
     for cohort in derived["cohorts"]:
         for field in ("year", "selected_count", "pulled_count", "median_psf", "basis", "thin", "comp_keys"):

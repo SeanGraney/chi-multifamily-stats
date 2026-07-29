@@ -16,11 +16,19 @@ submits → if a cache exists for identical params → F3; else system runs the
 pull (F4)". So (PM ruling, F4-S9):
 
     cache MISS  → pull. The user has already seen the cost: F2 step 3 shows
-                  "est. N API calls" live, before submit, from the same
-                  `fetchable_queries` count this route reports back.
+                  "est. N API calls" live, before submit, computed by
+                  `POST /api/search/plan` (`api/plan.py`) from the same
+                  `client/planner.py::fetchable_queries` function this route's
+                  own `estimated_calls` is counted with.
     cache HIT / STALE → fetch NOTHING. Return the existing ref and
                   `cache_status`, so F3-S2's modal can offer the choice.
     force_refresh → pull regardless.
+
+*(Erratum on the erratum, F2-S1: this paragraph previously said the preview
+number came "from the same `fetchable_queries` count **this route** reports
+back", which is only true once a pull has already happened — and F2 step 3 is
+by definition before that. QA caught it. The preview is a separate,
+non-spending route; what the two share is the function, not the response.)*
 
 "Stale" (an entry with a gap in it) deliberately sits on the no-fetch side:
 completing a partial pull costs real calls, so it is the user's decision, not
@@ -67,7 +75,14 @@ def post_search(request: SearchRequest) -> SearchResult:
     whose `missing` names the windows that never arrived (§5a — an incomplete
     first pull is usable, with the gap named loudly).
     """
-    search = _plan_args(request)
+    try:
+        # A bed/bath value the parser refuses (`"4-2"`, `"abc"`) is the user's
+        # input being wrong, not the tool — 422, not the 500 an uncaught
+        # ValueError out here would be.
+        search = request.plan_args()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     ref = pull_ref_for(**search)
 
     try:
@@ -133,22 +148,3 @@ def post_search(request: SearchRequest) -> SearchResult:
         missing=list(outcome.missing),
         calls_to_complete=outcome.calls_to_complete,
     )
-
-
-def _plan_args(request: SearchRequest) -> dict:
-    """The request in the planner's own argument names, whitespace trimmed.
-
-    Trimming is not cosmetic: `plan_pull_queries` rejects `"06-01 "` outright
-    (F4-S1 QA), and an address's leading spaces would change the cache key for
-    a search the user considers identical.
-    """
-    return {
-        "address": request.address.strip(),
-        "radius": request.radius,
-        "bedrooms": request.bedrooms.strip(),
-        "bathrooms": request.bathrooms.strip() if request.bathrooms else None,
-        "property_types": [value.strip() for value in request.property_types],
-        "years_back": request.years_back,
-        "window_start_mmdd": request.window_start.strip(),
-        "window_end_mmdd": request.window_end.strip(),
-    }

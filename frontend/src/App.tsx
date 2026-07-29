@@ -3,6 +3,7 @@ import TopBar, { type ViewName } from "./components/TopBar";
 import Home from "./views/Home";
 import Results from "./views/Results";
 import Analysis from "./views/Analysis";
+import Settings from "./views/Settings";
 
 /**
  * Three-view routing via plain React state (D13's precedent — no
@@ -19,6 +20,7 @@ export default function App() {
         {view === "home" && <Home />}
         {view === "results" && <Results />}
         {view === "analysis" && <Analysis />}
+        {view === "settings" && <Settings />}
       </main>
     </div>
   );

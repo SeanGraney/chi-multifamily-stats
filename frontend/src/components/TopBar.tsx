@@ -1,4 +1,4 @@
-export type ViewName = "home" | "results" | "analysis";
+export type ViewName = "home" | "results" | "analysis" | "settings";
 
 interface TopBarProps {
   active: ViewName;
@@ -18,6 +18,9 @@ export default function TopBar({ active, onNavigate }: TopBarProps) {
     { view: "home", label: "Home", testId: "nav-home" },
     { view: "results", label: "Results", testId: "nav-results" },
     { view: "analysis", label: "Analysis", testId: "nav-analysis" },
+    // F2-S1: the API key has to be enterable somewhere, and Settings is where
+    // F0-S4's AC says it lives.
+    { view: "settings", label: "Settings", testId: "nav-settings" },
   ];
 
   return (

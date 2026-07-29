@@ -31,6 +31,58 @@ export interface paths {
      */
     post: operations["post_search_api_search_post"];
   };
+  "/api/workspaces": {
+    /**
+     * Recent searches
+     * @description The recents index: one row per stored workspace, newest first.
+     *
+     * Home asks for this on mount, so it must answer for *whatever is on disk* —
+     * an empty store is an empty list (not a 404), and a store with one
+     * unreadable file is a list with one error row in it, never a broken front
+     * door. One bad file cannot cost the user every other search they have run.
+     */
+    get: operations["get_workspaces_api_workspaces_get"];
+  };
+  "/api/workspaces/{key}": {
+    /**
+     * Load a workspace
+     * @description Restore one curation state exactly as it was last saved.
+     *
+     * 404 when nothing is saved under that key — a row the user deleted, or a
+     * link from an old session, is an ordinary condition. 404 too for a key that
+     * could never address a file (a traversal attempt); the two are deliberately
+     * indistinguishable, so a probe learns nothing about what is on disk.
+     *
+     * 500, **naming the file**, when the workspace exists and cannot be read. A
+     * named error is the point: an unhandled exception rendered as a status code
+     * is still a crash, and the user has to know which file to refresh or delete.
+     *
+     * Deliberately silent about how old the evidence is. Routing a stale workspace
+     * through the cache modal is F1's edge and F3-S2's contract, and F3-S2 does
+     * not exist yet; inventing a freshness verdict here would be a contract two
+     * stories would then have to agree on after the fact.
+     */
+    get: operations["get_workspace_api_workspaces__key__get"];
+    /**
+     * Save a workspace
+     * @description Persist one curation state, replacing whatever was stored under `key`.
+     *
+     * Saving is not deriving. This route computes no statistic and the response
+     * carries none — a client that got its numbers from a save response would
+     * have two sources of truth for them (D5) — which is also what keeps F14-S2's
+     * debounced autosave cheap enough to run on every mutation.
+     *
+     * 422 (from `WorkspaceState`) for a negative weight, an unknown field or a
+     * `selections` key: each of those is curation that would otherwise fail
+     * silently. 400 for a key that cannot address a file, or one that disagrees
+     * with the `pull_ref` in the body.
+     *
+     * Never validates the evidence. Curation outlives the pull it curates: a
+     * workspace over a deleted cache entry is an error row offering refresh, not
+     * a save the store refuses to accept.
+     */
+    put: operations["put_workspace_api_workspaces__key__put"];
+  };
   "/api/search/plan": {
     /**
      * Preview a search's cohorts and call cost (fetches nothing)
@@ -462,6 +514,8 @@ export interface components {
       censored: boolean;
       /** Removal Class */
       removal_class: ("pending" | "provisional" | "confirmed") | null;
+      /** Days Since Removal */
+      days_since_removal: number | null;
       /** Withdrawal Suspect */
       withdrawal_suspect: boolean;
       /** Sqft Suspect */
@@ -661,6 +715,74 @@ export interface components {
       calls_to_complete: number;
     };
     /**
+     * RecentWorkspace
+     * @description One row of the recents table (F1-S1), from `GET /api/workspaces`.
+     *
+     * An **index over stored workspaces**, rebuilt from the directory on every
+     * read — never a second store that could drift from it — and deliberately
+     * free of derived statistics. Serving an `anchor` column here would mean
+     * deriving every saved workspace on Home's mount, against an epic budget of
+     * "<1s, zero API calls", and would put a derived number in an index that has
+     * no evidence in front of it. F1-S1 decides what to do about that column.
+     *
+     * A row is never dropped for being unreadable. A workspace that vanished
+     * from the list would take the user's curation with it, silently and with no
+     * way back; the AC asks for the opposite — the row stays, says it is broken,
+     * and offers the one thing that can fix it.
+     */
+    RecentWorkspace: {
+      /** Key */
+      key: string;
+      /** Saved At */
+      saved_at: string | null;
+      subject?: components["schemas"]["Subject"] | null;
+      search?: components["schemas"]["SearchParams"] | null;
+      /** Error */
+      error?: string | null;
+      /**
+       * Offer Refresh
+       * @default false
+       */
+      offer_refresh?: boolean;
+    };
+    /**
+     * SearchParams
+     * @description The comp-net definition that produced one pull's evidence (F2-S1/F4-S9).
+     *
+     * Deliberately the *pull's* parameters and nothing else: the subject's own
+     * sqft, the drift assumption and every curation knob belong to
+     * `DeriveRequest`, because none of them change which records come back.
+     * Keeping them out is what makes the cache key a function of the search
+     * (F3-S1) rather than of everything the user has touched since.
+     *
+     * `extra="forbid"` for the same reason as `DeriveRequest`: a typo'd field
+     * here would silently widen or narrow a pull that costs real money.
+     *
+     * Split out of `SearchRequest` by F1-S2 because a stored workspace has to
+     * carry these values and must *not* carry `force_refresh` — consent to spend
+     * money is a property of one request, never of saved state. One declaration
+     * of the eight fields, so the params a workspace remembers and the params a
+     * search submits cannot drift apart.
+     */
+    SearchParams: {
+      /** Address */
+      address: string;
+      /** Radius */
+      radius: number;
+      /** Bedrooms */
+      bedrooms: string;
+      /** Bathrooms */
+      bathrooms?: string | null;
+      /** Property Types */
+      property_types: string[];
+      /** Years Back */
+      years_back: number;
+      /** Window Start */
+      window_start: string;
+      /** Window End */
+      window_end: string;
+    };
+    /**
      * SearchPlan
      * @description What `POST /api/search/plan` answers (F2-S3) — the cost of a search,
      * before anyone has agreed to pay it.
@@ -691,16 +813,12 @@ export interface components {
     };
     /**
      * SearchRequest
-     * @description The subject + comp-net definition a search form submits (F2-S1/F4-S9).
+     * @description What a search form submits: the pull's params plus the consent flag.
      *
-     * Deliberately the *pull's* parameters and nothing else: the subject's own
-     * sqft, the drift assumption and every curation knob belong to
-     * `DeriveRequest`, because none of them change which records come back.
-     * Keeping them out is what makes the cache key a function of the search
-     * (F3-S1) rather than of everything the user has touched since.
-     *
-     * `extra="forbid"` for the same reason as `DeriveRequest`: a typo'd field
-     * here would silently widen or narrow a pull that costs real money.
+     * `force_refresh` lives here and nowhere else. It is the user's decision, in
+     * one moment, to re-spend on evidence already on disk — never a property of
+     * anything persisted, which is why `SearchParams` (what a workspace stores)
+     * stops one field short of it.
      */
     SearchRequest: {
       /** Address */
@@ -790,6 +908,69 @@ export interface components {
       /** Context */
       ctx?: Record<string, never>;
     };
+    /**
+     * Workspace
+     * @description One stored curation state, as `GET/PUT /api/workspaces/{key}` answers it.
+     *
+     * `state` is nested — and is exactly a `DeriveRequest` — so that reopening a
+     * recent search is "read this, POST it to `/api/derive`" with nothing added,
+     * removed or renamed in between. A flat envelope would mix the store's own
+     * bookkeeping (`key`, `saved_at`) into the curation state, and a client that
+     * posted the whole thing back would get a 422 from `extra="forbid"`.
+     *
+     * Deliberately carries **no derived statistic and no cache-freshness verdict**.
+     * Whether the evidence behind this workspace has aged past the 7-day line is
+     * F3-S2's cache modal to decide and to say; answering it here would make
+     * every consumer of a saved workspace depend on a contract that does not
+     * exist yet.
+     */
+    Workspace: {
+      /** Key */
+      key: string;
+      /** Saved At */
+      saved_at: string | null;
+      state: components["schemas"]["DeriveRequest"];
+      search?: components["schemas"]["SearchParams"] | null;
+    };
+    /**
+     * WorkspaceState
+     * @description The body of `PUT /api/workspaces/{key}` — one saved workspace (F1-S2).
+     *
+     * Literally `DeriveRequest` plus the search that produced the evidence it
+     * curates. Inheritance rather than a parallel model on purpose: "restored
+     * exactly as last left" means the thing that comes back out of the store is
+     * the thing `POST /api/derive` takes, so a field that exists on one and not
+     * the other is a field the user can lose.
+     *
+     * **Why `search` has to be here at all.** F1-S1's recents table renders
+     * address / specs / radius per row, and none of those is recoverable from
+     * anything else on disk: the cache key is a one-way SHA256 of the search
+     * params (F3-S1) and the manifest holds only `as_of`, the window and the
+     * per-query record. So the workspace stores them at save time or they are
+     * gone. Optional, because a client that has not got them (or does not care)
+     * must still be able to save curation — losing a table column is not a
+     * reason to lose the user's work.
+     */
+    WorkspaceState: {
+      /** Pull Ref */
+      pull_ref: string;
+      subject: components["schemas"]["Subject"];
+      /** Weights */
+      weights?: {
+        [key: string]: number;
+      };
+      /** Include Overrides */
+      include_overrides?: string[];
+      filters?: components["schemas"]["Filters"];
+      /**
+       * Drift Pct
+       * @default 0
+       */
+      drift_pct?: number;
+      /** Candidate Rent */
+      candidate_rent?: number | null;
+      search?: components["schemas"]["SearchParams"] | null;
+    };
   };
   responses: never;
   parameters: never;
@@ -856,6 +1037,108 @@ export interface operations {
       200: {
         content: {
           "application/json": components["schemas"]["SearchResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Recent searches
+   * @description The recents index: one row per stored workspace, newest first.
+   *
+   * Home asks for this on mount, so it must answer for *whatever is on disk* —
+   * an empty store is an empty list (not a 404), and a store with one
+   * unreadable file is a list with one error row in it, never a broken front
+   * door. One bad file cannot cost the user every other search they have run.
+   */
+  get_workspaces_api_workspaces_get: {
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["RecentWorkspace"][];
+        };
+      };
+    };
+  };
+  /**
+   * Load a workspace
+   * @description Restore one curation state exactly as it was last saved.
+   *
+   * 404 when nothing is saved under that key — a row the user deleted, or a
+   * link from an old session, is an ordinary condition. 404 too for a key that
+   * could never address a file (a traversal attempt); the two are deliberately
+   * indistinguishable, so a probe learns nothing about what is on disk.
+   *
+   * 500, **naming the file**, when the workspace exists and cannot be read. A
+   * named error is the point: an unhandled exception rendered as a status code
+   * is still a crash, and the user has to know which file to refresh or delete.
+   *
+   * Deliberately silent about how old the evidence is. Routing a stale workspace
+   * through the cache modal is F1's edge and F3-S2's contract, and F3-S2 does
+   * not exist yet; inventing a freshness verdict here would be a contract two
+   * stories would then have to agree on after the fact.
+   */
+  get_workspace_api_workspaces__key__get: {
+    parameters: {
+      path: {
+        key: string;
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["Workspace"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Save a workspace
+   * @description Persist one curation state, replacing whatever was stored under `key`.
+   *
+   * Saving is not deriving. This route computes no statistic and the response
+   * carries none — a client that got its numbers from a save response would
+   * have two sources of truth for them (D5) — which is also what keeps F14-S2's
+   * debounced autosave cheap enough to run on every mutation.
+   *
+   * 422 (from `WorkspaceState`) for a negative weight, an unknown field or a
+   * `selections` key: each of those is curation that would otherwise fail
+   * silently. 400 for a key that cannot address a file, or one that disagrees
+   * with the `pull_ref` in the body.
+   *
+   * Never validates the evidence. Curation outlives the pull it curates: a
+   * workspace over a deleted cache entry is an error row offering refresh, not
+   * a save the store refuses to accept.
+   */
+  put_workspace_api_workspaces__key__put: {
+    parameters: {
+      path: {
+        key: string;
+      };
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WorkspaceState"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["Workspace"];
         };
       };
       /** @description Validation Error */

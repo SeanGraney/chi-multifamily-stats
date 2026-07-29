@@ -33,7 +33,7 @@ the same class object, so nothing that already imports it has to move.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -131,6 +131,39 @@ class StitchedComp(BaseModel):
     cut_history: tuple[PriceCut, ...] = ()
     relist_count: int = Field(default=0, ge=0)
     gap_days: int = Field(default=0, ge=0)
+
+    @property
+    def removed_on(self) -> date | None:
+        """The chain's final removal date, or `None` while it is still active.
+
+        F4-S8: the datum the removal ladder is *measured from*. `removal_class`
+        is a function of `as_of − removed_on`, so a row that says "pending"
+        without being able to say *since when* is an assertion the user cannot
+        check — and the story's own row copy ("removed 4d — classifying") is
+        that date, rendered.
+
+        A **property**, not a stored field, for the same reason `psf` is one:
+        it cannot drift from its inputs. F4-S3 defines `effective_dom` as
+        *final removal − first listed*, so for any comp the pipeline shaped,
+        `first_listed + effective_dom` **is** the final removal — reconstructed
+        here rather than stored beside it, where the two could disagree after a
+        change to either. (`pipeline/shape.py::_build_comp` is the one place
+        that identity is established; `tests/unit/test_f4s8_removed_on.py`
+        pins it against the raw `removedDate` the records actually carried.)
+
+        `None` in exactly two cases, both honest:
+
+        * `censored` — a still-listed unit has not been removed, let alone
+          leased (NORTH_STAR's most important distinction). Its `effective_dom`
+          is a floor measured to the pull date, so `first_listed +
+          effective_dom` would reconstruct the *pull date*, not a removal.
+        * `first_listed is None` — a hand-built `StitchedComp` from a test that
+          did not go through `shape_raw_pull`. Real shaping always sets it (see
+          that field's note); nothing is inferred from its absence.
+        """
+        if self.censored or self.first_listed is None:
+            return None
+        return self.first_listed + timedelta(days=self.effective_dom)
 
     @property
     def psf(self) -> float | None:

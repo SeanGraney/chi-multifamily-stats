@@ -55,7 +55,14 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from rentcomp.models.domain import StitchedComp
 from rentcomp.pipeline.shape import shape_raw_pull
-from rentcomp.storage.cache import CacheMissError, raw_response_paths, read_manifest
+from rentcomp.storage.cache import (
+    CORRUPT_MANIFEST_ERRORS,
+    CacheMissError,
+    manifest_fingerprint,
+    raw_response_paths,
+    read_manifest,
+    records_from_raw,
+)
 from rentcomp.storage.config import Config
 
 __all__ = [
@@ -66,6 +73,7 @@ __all__ = [
     "config_digest",
     "fixture_pulls_dir",
     "load_shaped_pull",
+    "pull_exists",
 ]
 
 #: Overrides where synthetic pulls are read from (tests, E2E harnesses).
@@ -171,16 +179,82 @@ def load_shaped_pull(pull_ref: str, config: Config) -> ShapedPull:
     return _shaped_pull(fixture_pulls_dir(), pull_ref, config, _evidence_version(pull_ref))
 
 
-def _evidence_version(pull_ref: str) -> str:
-    """A cheap fingerprint of the raw responses currently filed under a
-    cache-backed ref — the memo's staleness guard (see `load_shaped_pull`).
+def pull_exists(pull_ref: str) -> bool:
+    """Is there evidence at this ref — **without shaping any of it** (F1-S2)?
 
-    `(name, size, mtime_ns)` per raw file rather than a digest of their
-    contents. `cache/` is append-only immutable evidence by construction
-    (ARCHITECTURE.md §5): the only way the shaped result can change is a file
-    appearing, and that is visible in the name set alone. Size and mtime are
-    belt-and-braces for an in-place rewrite, and cost two `stat` calls per
-    file against the whole-file read a hash would need.
+    The recents index asks this once per row on every render of Home, so it has
+    to be cheap: a `stat` and a manifest read, never `load_shaped_pull`. A
+    workspace whose pull is gone is F1's "missing cache entry" edge — an error
+    row offering refresh — and answering it by deriving would blow the epic's
+    "<1s" budget to compute a boolean.
+
+    Handles all three kinds of ref (WS-1's fixtures, a real cache key, a
+    synthetic pull) here rather than at the caller, so the one place that knows
+    how a ref resolves stays the one place that knows whether it resolves.
+
+    **Total: it answers `False` rather than raising, for every shape of broken
+    entry.** Its one caller is the recents index, which renders Home; an
+    exception escaping here is not a bad row, it is no Home screen at all —
+    the "never a crash" the AC forbids. `CORRUPT_MANIFEST_ERRORS` is imported
+    rather than spelled out for the reason F2-S1 introduced it: a hand-written
+    `(OSError, ValueError, KeyError)` does NOT catch the `TypeError` /
+    `AttributeError` that a right-shape-wrong-types manifest raises inside
+    coercion, which is how two corruption shapes escaped as anonymous 500s in
+    F4-S9. Measured here before the tuple was used: a manifest with
+    `"as_of": 17` raised `TypeError: fromisoformat: argument must be str`.
+
+    False is also the honest answer for a corrupt entry, not merely the safe
+    one: an entry that cannot be read cannot be derived from either, so the row
+    is un-openable and gets the same error-and-offer-refresh treatment as one
+    that is gone. Nothing here re-fetches to work around it (D24) — refresh
+    stays the user's decision.
+    """
+    try:
+        safe_ref = _safe_ref(pull_ref)
+    except PullNotFoundError:
+        return False
+
+    if safe_ref == WS1_REAL_PULL_REF:
+        return _WS1_ACTIVE_FIXTURE.is_file() and _WS1_INACTIVE_FIXTURE.is_file()
+
+    if _looks_like_cache_key(safe_ref):
+        try:
+            read_manifest(safe_ref)
+            # A manifest with no bytes behind it is exactly as "not there yet"
+            # as no entry at all — the rule `_load_cache_backed_pull` applies.
+            return bool(raw_response_paths(safe_ref))
+        except (CacheMissError, *CORRUPT_MANIFEST_ERRORS):
+            return False
+
+    try:
+        return (fixture_pulls_dir() / f"{safe_ref}.json").is_file()
+    except OSError:
+        return False
+
+
+def _evidence_version(pull_ref: str) -> str:
+    """A cheap fingerprint of everything a shaped pull is built from — the
+    memo's staleness guard (see `load_shaped_pull`).
+
+    Two halves, because `_load_cache_backed_pull` reads two things:
+
+    * **the raw responses**, as `(name, size, mtime_ns)` per file rather than a
+      digest of their contents. `cache/` is append-only immutable evidence by
+      construction (ARCHITECTURE.md §5): the only way the shaped result can
+      change is a file appearing, and that is visible in the name set alone.
+      Size and mtime are belt-and-braces for an in-place rewrite, and cost two
+      `stat` calls per file against the whole-file read a hash would need.
+    * **the manifest** (F3-S4). `as_of` and `window` come from it and are handed
+      straight to `shape_raw_pull`, so a manifest that changes while the bytes
+      do not changes every censored comp's `effective_dom` — and used to be
+      invisible here, leaving the process serving numbers derived from a date
+      that is no longer on disk. Fixing `run_pull`'s restamp removes the way
+      the *product* reaches that state; it does not remove the state (a
+      restored backup, a hand-edit, a later story rewriting a manifest), and
+      the failure is silent by construction. Digested by content rather than
+      by mtime: `as_of` moving from one ISO date to another leaves the file
+      exactly the same size, so size+mtime would rest entirely on the clock's
+      resolution.
 
     Empty string for everything that is not a cache-backed ref (synthetic
     pulls, `ws1-real`): those are read-only fixtures nothing appends to, and
@@ -189,7 +263,7 @@ def _evidence_version(pull_ref: str) -> str:
     try:
         if not _looks_like_cache_key(_safe_ref(pull_ref)):
             return ""
-        parts = []
+        parts = [f"manifest:{manifest_fingerprint(pull_ref)}"]
         for path in raw_response_paths(pull_ref):
             stat = path.stat()
             parts.append(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}")
@@ -302,9 +376,21 @@ def _load_cache_backed_pull(key: str, config: Config) -> ShapedPull:
     inactive: list[dict] = []
     raw_blobs: list[bytes] = []
     for path in paths:
-        blob = path.read_bytes()
+        try:
+            blob = path.read_bytes()
+        except OSError:
+            # A directory standing where a response belongs — crash debris, not
+            # evidence, and not a reason to fail the whole derive.
+            continue
+        records = records_from_raw(blob)
+        if records is None:
+            # Present is not the same as usable: a response truncated by a
+            # crash, emptied, or in a shape this parser does not recognise is
+            # not evidence, and shaping must not choke on it or invent records
+            # out of it. `pull_status` reports the same file as an open window,
+            # so the two answers agree about what this pull holds (F3-S4).
+            continue
         raw_blobs.append(blob)
-        records = json.loads(blob) if blob else []
         # "inactive" contains "active" as a substring, so it must be checked
         # first — a sig like "y2025-inactive-off000" must not be misfiled.
         bucket = inactive if "inactive" in path.stem else active

@@ -35,11 +35,12 @@ rounded at display only (D14).
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from rentcomp.models.requests import DeriveRequest, SearchParams, Subject
 from rentcomp.storage.config import Config
 
 __all__ = [
@@ -64,8 +65,10 @@ __all__ = [
     "Neighbor",
     "PartialPullInfo",
     "PriceTest",
+    "RecentWorkspace",
     "SearchPlan",
     "SearchResult",
+    "Workspace",
 ]
 
 T = TypeVar("T")
@@ -143,6 +146,21 @@ class DerivedComp(BaseModel):
     censored: bool
     #: `None` iff censored — a still-active listing has not been removed.
     removal_class: RemovalClass | None
+    #: Whole days between this comp's final removal and the pull date — the
+    #: number `removal_class` was decided by, and the "4d" in F4-S8's row copy
+    #: *"removed 4d — classifying"*. `None` iff `removal_class` is `None`.
+    #:
+    #: A **count, not a date**, deliberately. `removed_on` alone would leave
+    #: the view subtracting it from `meta.as_of` — a derivation the view is not
+    #: allowed to perform (D5) and, in JS, date arithmetic across a timezone
+    #: boundary, which D15 keeps out of this codebase entirely. Shipping the
+    #: difference means the only client-side step left is formatting.
+    #:
+    #: Carried for **every** removed comp, not only pendings: it is a plain
+    #: fact about the comp, and a field that existed only in one state would
+    #: make the row's rendering branch on a field's presence rather than on the
+    #: ladder rung it is displaying.
+    days_since_removal: int | None
     withdrawal_suspect: bool
     sqft_suspect: bool
 
@@ -536,3 +554,64 @@ class SearchPlan(BaseModel):
     estimated_calls: int
     #: One entry per `years_back`, newest first.
     cohorts: list[CohortPlan]
+
+
+class Workspace(BaseModel):
+    """One stored curation state, as `GET/PUT /api/workspaces/{key}` answers it.
+
+    `state` is nested — and is exactly a `DeriveRequest` — so that reopening a
+    recent search is "read this, POST it to `/api/derive`" with nothing added,
+    removed or renamed in between. A flat envelope would mix the store's own
+    bookkeeping (`key`, `saved_at`) into the curation state, and a client that
+    posted the whole thing back would get a 422 from `extra="forbid"`.
+
+    Deliberately carries **no derived statistic and no cache-freshness verdict**.
+    Whether the evidence behind this workspace has aged past the 7-day line is
+    F3-S2's cache modal to decide and to say; answering it here would make
+    every consumer of a saved workspace depend on a contract that does not
+    exist yet.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: The cache key this workspace is filed under — also its `pull_ref`.
+    key: str
+    #: When the store last wrote it. `None` only for a file that arrived on
+    #: disk by some route other than a save and whose mtime is unreadable.
+    saved_at: datetime | None
+    #: The curation state, restored verbatim: the exact body `POST /api/derive`
+    #: takes, including a `0.0` weight and a `null` candidate rent.
+    state: DeriveRequest
+    #: The search that produced the evidence, when the client stored it.
+    search: SearchParams | None = None
+
+
+class RecentWorkspace(BaseModel):
+    """One row of the recents table (F1-S1), from `GET /api/workspaces`.
+
+    An **index over stored workspaces**, rebuilt from the directory on every
+    read — never a second store that could drift from it — and deliberately
+    free of derived statistics. Serving an `anchor` column here would mean
+    deriving every saved workspace on Home's mount, against an epic budget of
+    "<1s, zero API calls", and would put a derived number in an index that has
+    no evidence in front of it. F1-S1 decides what to do about that column.
+
+    A row is never dropped for being unreadable. A workspace that vanished
+    from the list would take the user's curation with it, silently and with no
+    way back; the AC asks for the opposite — the row stays, says it is broken,
+    and offers the one thing that can fix it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    key: str
+    saved_at: datetime | None
+    #: The unit being priced. Carries the address F1-S1's table renders.
+    subject: Subject | None = None
+    #: Address / specs / radius for the table, when the workspace stored them.
+    search: SearchParams | None = None
+    #: Why this row cannot be opened — an unreadable workspace file, or
+    #: evidence that is no longer on disk. `None` on a healthy row.
+    error: str | None = None
+    #: Whether a full re-pull is the way out of `error` (F1's edge state).
+    offer_refresh: bool = False

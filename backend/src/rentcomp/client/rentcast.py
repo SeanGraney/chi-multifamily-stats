@@ -59,6 +59,7 @@ from pathlib import Path
 import httpx
 
 from rentcomp.client.query import MAX_LIMIT
+from rentcomp.storage.cache import records_in
 from rentcomp.storage.ledger import MONTHLY_CALL_CAP, load_ledger, save_ledger
 from rentcomp.storage.secrets import load_api_key
 
@@ -81,6 +82,7 @@ __all__ = [
     "RateLimitError",
     "RentCastClient",
     "RentCastError",
+    "ResponseUnusableError",
     "UpstreamError",
     "fixture_signature",
     "resolve_mode",
@@ -160,6 +162,21 @@ class UpstreamError(RentCastError):
     Typed rather than degraded to an empty list on purpose: `[]` would render
     as F4's "0 comps in radius" empty state and send the user off widening a
     radius to fix a server outage.
+    """
+
+
+class ResponseUnusableError(UpstreamError):
+    """A 2xx arrived, and this parser cannot make records out of it.
+
+    Its own type because it is the one failure where **the call succeeded**:
+    the request left, the quota is spent, the body is on disk through the sink
+    (D24 write-through happens *before* this is raised), and buying the window
+    again returns exactly the same bytes. Every other `RentCastError` means a
+    call delivered nothing and a retry might.
+
+    F3-S4 is the reason the distinction is typed rather than inferred: a resume
+    that treats "we hold an unparseable answer" as "we hold nothing" re-buys a
+    response it is already holding, out of 50 calls a month.
     """
 
 
@@ -629,29 +646,52 @@ def _parse_json(raw: bytes, *, source: str):
     try:
         return json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise UpstreamError(
+        raise ResponseUnusableError(
             f"RentCast returned a body that is not JSON ({source}): {exc}"
         ) from exc
 
 
 def _extract_records(data) -> list[dict]:
-    """Records out of a response body.
+    """Records out of a response body — `storage.cache.records_in`, raising.
 
     The endpoint answers with a bare JSON array; the `{"listings": [...]}`
     shape is accepted too because that is what `scripts/gate.py` already
     tolerates and the two must not disagree about what a response is.
+
+    **The shape rule is imported, not restated.** This function used to keep
+    its own copy and read an unrecognised envelope (`{"data": [...]}` — what a
+    RentCast schema change looks like) as `[]`, an empty market, while the
+    store read the same bytes as unusable. That disagreement re-opened a
+    satisfied window on every run and bought it again, without bound (F3-S4).
+    One definition, in the module that also answers the question about bytes
+    on disk; the import direction is the one this package already takes for
+    `storage.ledger` and `storage.secrets`.
+
+    Raising is this side's half: an unrecognised body is `ResponseUnusableError`
+    and never `[]`, because "no comps in this window" is a real, paid-for
+    answer and "we cannot read the answer" is not.
     """
-    if isinstance(data, list):
-        records = data
-    elif isinstance(data, dict):
-        records = data.get("listings", [])
-    else:
-        raise UpstreamError(
-            f"RentCast returned {type(data).__name__}, expected a list of listings"
+    records = records_in(data)
+    if records is None:
+        raise ResponseUnusableError(
+            f"RentCast returned a body this client cannot read as listings: "
+            f"{_shape_of(data)}. Expected a JSON array of listings, or "
+            '{"listings": [...]}. This is what a schema change looks like — the '
+            "response is on disk and nothing was thrown away."
         )
-    if not isinstance(records, list):
-        raise UpstreamError("RentCast returned a 'listings' value that is not a list")
-    return [record for record in records if isinstance(record, dict)]
+    return records
+
+
+def _shape_of(data) -> str:
+    """A short, safe description of an unusable body for the error message.
+
+    Keys only, never values: the body is untrusted upstream content and an
+    error string is the one place it would otherwise be echoed wholesale.
+    """
+    if isinstance(data, dict):
+        keys = sorted(str(key) for key in data)[:5]
+        return f"a JSON object with keys {keys}"
+    return f"a JSON {type(data).__name__}"
 
 
 def _error_for(response: httpx.Response, api_key: str) -> RentCastError:

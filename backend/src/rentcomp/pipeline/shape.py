@@ -23,6 +23,14 @@ literally unreachable through ``shape_raw_pull``. The seam takes a plain
 ``shape_raw_pull`` calls it, so it is the real path and not a second
 implementation that can drift.
 
+``shape_raw_pull_with_summary`` is the third and last (F4-S4), and it is not
+really a fourth seam so much as the same one seen whole: F4-S4's AC requires
+that padding-only chains are "dropped **and counted in a pipeline debug
+summary**", and a count `shape_raw_pull` computes and throws away is
+unassertable. It is the implementation; ``shape_raw_pull`` is a projection of
+it that drops the summary, so the two cannot disagree about which comps a
+pull shapes to.
+
 INPUT SHAPE
 -----------
 ``active_records``/``inactive_records`` are the raw parsed JSON lists from
@@ -61,21 +69,30 @@ ALGORITHM (one pass, four stages, all inside this function/its helpers)
    flagged ``withdrawal_suspect``.
 6. **Window + cohort** (F4-S4): a chain survives only if its *stitched
    start*'s month-day falls inside ``[window_start_mmdd, window_end_mmdd]``
-   (year-agnostic, wraparound-safe); ``cohort_year`` is that start's
-   calendar year.
+   (year-agnostic, both edges inclusive, wraparound-safe); ``cohort_year`` is
+   that start's calendar year. The chains this step throws away are counted,
+   not merely dropped — see `shape_raw_pull_with_summary`.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 
 from rentcomp.models.domain import PriceCut, Spell, StitchedComp
 from rentcomp.pipeline.keys import comp_key
 from rentcomp.storage.config import Config
 
-__all__ = ["Spell", "extract_spells", "shape_raw_pull", "stitch"]
+__all__ = [
+    "ShapingSummary",
+    "Spell",
+    "extract_spells",
+    "shape_raw_pull",
+    "shape_raw_pull_with_summary",
+    "stitch",
+]
 
 #: F4-S8 [INVARIANT]: the confirmed rung of the removal ladder — a fixed
 #: 42 days, from the story text, not a configurable knob (only
@@ -95,6 +112,50 @@ WITHDRAWAL_SUSPECT_MIN_DAYS = 42
 _DAYS_PER_MONTH = 30
 
 
+@dataclass(frozen=True, slots=True)
+class ShapingSummary:
+    """F4-S4 [INVARIANT], second clause: the padding a pull paid for and this
+    stage threw away, counted rather than silently discarded.
+
+    Why this exists at all: spec §3.2 pads every query +/-90 days on both
+    sides, because RentCast resets ``listedDate`` on a re-list and a
+    June-window comp can only be recognized as one after stitching. The pad is
+    therefore *bought* padding — on the committed real pull a 16-day June
+    window keeps 28 chains and drops 539, so **95% of what the pull paid for
+    is discarded here by design**. A drop that leaves no trace makes "your
+    market is thin" and "your window is narrow" indistinguishable, and those
+    call for opposite user actions (widen the radius vs. widen the window).
+    It also means a query-planner or stitcher regression that quietly widened
+    the drop set would look exactly like a thin market.
+
+    COUNTS ARE OF CHAINS, NOT RAW RECORDS (PM ruling A4). The window is
+    applied to a stitched chain, so the chain is the thing dropped: three raw
+    records that stitch into one padding chain are one drop, not three.
+    Counting records would over-report by the re-list count and would never
+    reconcile against `kept`, which is a chain count by construction.
+
+    ``kept + dropped_outside_window`` is every chain this pull shaped — the
+    same spirit as F7-S1's ``included + excluded + filtered == pulled``,
+    one stage earlier. Note what is *outside* both counts and outside that
+    identity: a group that produced no spells at all (no parseable
+    ``listedDate``) never reaches the window, so it is neither kept nor
+    dropped-outside-window. This summary accounts for the window's decisions,
+    not for parse losses.
+
+    Deliberately **not** on the wire (PM ruling, this story). `DerivedState.
+    breakdown`'s identity is an [INVARIANT] computed over already-post-window
+    comps; adding a padding count to it would change what that invariant is
+    measured over. Extra fields (per-cohort tallies, the dropped keys) can be
+    added later without breaking anything that reads these two.
+    """
+
+    #: Chains whose stitched start fell inside the window — always
+    #: ``len(comps)`` for the same call.
+    kept: int
+    #: Chains dropped because their stitched start fell outside it.
+    dropped_outside_window: int
+
+
 def shape_raw_pull(
     active_records: Sequence[dict],
     inactive_records: Sequence[dict],
@@ -105,14 +166,43 @@ def shape_raw_pull(
 ) -> tuple[StitchedComp, ...]:
     """Dedupe -> spells -> stitch -> classify -> window filter + cohort.
 
+    The comps-only entry point, and the one `storage/pulls.py` calls. It
+    *delegates* to `shape_raw_pull_with_summary` and drops the summary rather
+    than re-implementing the chain, so the two can never drift into two
+    shaping runs that disagree.
+
     Deterministic: groups are visited in sorted-key order, so two calls over
     the same inputs produce the same tuple in the same order.
+    """
+    comps, _ = shape_raw_pull_with_summary(
+        active_records, inactive_records, config, as_of, window_start_mmdd, window_end_mmdd
+    )
+    return comps
+
+
+def shape_raw_pull_with_summary(
+    active_records: Sequence[dict],
+    inactive_records: Sequence[dict],
+    config: Config,
+    as_of: date,
+    window_start_mmdd: str,
+    window_end_mmdd: str,
+) -> tuple[tuple[StitchedComp, ...], ShapingSummary]:
+    """`shape_raw_pull`, plus the F4-S4 count of what the window discarded.
+
+    The same computation and the same comps — this is the implementation and
+    `shape_raw_pull` is the projection of it, not the other way round. Split
+    in two only because `shape_raw_pull` has three call sites in
+    `storage/pulls.py` and a body of tests comparing its tuple directly, and
+    a summary that arrived by changing its return type would be a refactor
+    this story did not ask for (PM ruling A4).
     """
     groups: dict[str, list[dict]] = defaultdict(list)
     for copies in _dedupe_by_id(active_records, inactive_records):
         groups[_group_key(copies)].extend(copies)
 
     comps: list[StitchedComp] = []
+    dropped = 0
     for key in sorted(groups):
         spells = extract_spells(groups[key])
         if not spells:
@@ -122,9 +212,10 @@ def shape_raw_pull(
         for chain, suspect in zip(chains, suspects, strict=True):
             start = chain[0].listed
             if not _in_window(start, window_start_mmdd, window_end_mmdd):
+                dropped += 1
                 continue
             comps.append(_build_comp(chain, suspect, as_of, config))
-    return tuple(comps)
+    return tuple(comps), ShapingSummary(kept=len(comps), dropped_outside_window=dropped)
 
 
 def _dedupe_by_id(active: Sequence[dict], inactive: Sequence[dict]) -> list[list[dict]]:

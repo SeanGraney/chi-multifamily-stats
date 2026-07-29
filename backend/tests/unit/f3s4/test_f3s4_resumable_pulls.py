@@ -65,11 +65,30 @@ from rentcomp.storage.config import Config
 from rentcomp.storage.ledger import load_ledger
 from rentcomp.storage.pulls import load_shaped_pull
 
-#: A 200 whose body is valid JSON and is not what the client can use — D24's
-#: "a validation bug **or a schema surprise** must never cost an API call".
-#: The call was made, the money is gone, and the bytes are the only thing
-#: standing between us and paying for them again.
-POISON = b'{"listings": "this is not a list"}'
+#: 200s whose bodies are valid JSON and are not what the client can use —
+#: D24's "a validation bug **or a schema surprise** must never cost an API
+#: call". The call was made, the money is gone, and the bytes are the only
+#: thing standing between us and paying for them again.
+#:
+#: TWO shapes, because one of them is not enough and this file learned that the
+#: hard way. The first was all this spec originally carried; it reaches the
+#: client's own "I cannot read this" refusal, so it exercised the *typed*
+#: failure path only. The second is the canonical shape of a RentCast schema
+#: change, and until the fix round it was read by the fetch path as an ordinary
+#: empty answer while the store read the same bytes as unusable — a window
+#: filed satisfied, demoted on every read, and **bought again on every attempt
+#: with no stopping condition** (measured at verify: 4 of 4 windows, 4 calls
+#: per attempt, 24 of 50 in six tries). The AC below was green against the
+#: first shape and false against the second, which is precisely why the story's
+#: money invariant has to be asserted over the *class* of unusable body rather
+#: than over one specimen of it.
+UNUSABLE_BODIES = {
+    # `listings` present, not a list -> the client raises on its own.
+    "a listings value that is not a list": b'{"listings": "this is not a list"}',
+    # No `listings` key at all -> what a schema change actually looks like.
+    "an envelope this client has never seen": b'{"data": [{"id": "x"}]}',
+}
+POISON = UNUSABLE_BODIES["a listings value that is not a list"]
 
 
 # ===========================================================================
@@ -115,8 +134,9 @@ def test_the_harness_pulls_four_windows(live_env, no_sockets) -> None:
 # ===========================================================================
 
 
+@pytest.mark.parametrize("shape", sorted(UNUSABLE_BODIES))
 def test_a_response_our_parser_rejects_is_kept_and_never_bought_again(
-    live_env, no_sockets
+    live_env, no_sockets, shape
 ) -> None:
     """The AC's first clause, both halves, and the one D24 exists for.
 
@@ -133,14 +153,22 @@ def test_a_response_our_parser_rejects_is_kept_and_never_bought_again(
     * the re-run must not go back to the source for them — `NoPurchase` raises
       at the reach rather than counting it (see `f3s4_support`).
 
-    RED as at dispatch: `_fetch_one` turns any `RentCastError` — including the
-    `UpstreamError` its own parse raises *after* the sink already filed the
-    bytes — into `satisfied=False`, so the resume diff owes that window again
-    and the second run buys a response it is already holding.
+    **Parametrised over both unusable shapes, and that is the point.** Written
+    with one specimen, this test was green while the AC it names was false:
+    the shape it used reached the client's typed refusal, and the shape it did
+    not use reached nothing at all — the fetch path called it an empty answer,
+    the store called it unusable, and the window was re-bought on every attempt
+    forever. A money invariant asserted over one specimen of a class is an
+    invariant asserted over none of it. See `UNUSABLE_BODIES`.
     """
+    unusable = UNUSABLE_BODIES[shape]
 
     def answer(request: httpx.Request, n: int) -> httpx.Response:
-        return httpx.Response(200, content=POISON) if n == 3 else one_record_per_query(request, n)
+        return (
+            httpx.Response(200, content=unusable)
+            if n == 3
+            else one_record_per_query(request, n)
+        )
 
     wire = Wire(answer)
     first = run_pull(**SEARCH, today=TODAY, transport=wire.transport)
@@ -148,9 +176,9 @@ def test_a_response_our_parser_rejects_is_kept_and_never_bought_again(
 
     assert len(wire.requests) == FETCHABLE
     stored = {path.read_bytes() for path in raw_response_paths(ref)}
-    assert POISON in stored, (
-        "the response that failed to parse was not kept. It was a 200, it was billed, and "
-        "the raw bytes are what make re-parsing it free forever (D24)."
+    assert unusable in stored, (
+        f"[{shape}] the response that failed to parse was not kept. It was a 200, it was "
+        "billed, and the raw bytes are what make re-parsing it free forever (D24)."
     )
     assert len(stored) == FETCHABLE, (
         f"{len(stored)} of {FETCHABLE} paid-for responses are on disk — a call was spent "
@@ -158,7 +186,7 @@ def test_a_response_our_parser_rejects_is_kept_and_never_bought_again(
     )
 
     assert first.calls_to_complete == 0, (
-        f"the pull says {first.calls_to_complete} call(s) would complete it, but every "
+        f"[{shape}] the pull says {first.calls_to_complete} call(s) would complete it, but every "
         "window's response is already on disk and re-buying window 3 would return the same "
         "bytes. The number the user is shown and the number a resume actually spends must "
         "be one number (the F2-S3 invariant) — and here both must be zero."
@@ -168,8 +196,8 @@ def test_a_response_our_parser_rejects_is_kept_and_never_bought_again(
 
     assert second.pull_ref == ref
     assert second.calls_spent == 0
-    assert POISON in {path.read_bytes() for path in raw_response_paths(ref)}, (
-        "the re-run overwrote or dropped the kept bytes"
+    assert unusable in {path.read_bytes() for path in raw_response_paths(ref)}, (
+        f"[{shape}] the re-run overwrote or dropped the kept bytes"
     )
 
 

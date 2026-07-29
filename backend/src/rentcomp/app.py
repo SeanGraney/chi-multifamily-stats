@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from rentcomp.api.derive import router as derive_router
 from rentcomp.api.search import router as search_router
+from rentcomp.api.workspaces import router as workspaces_router
 
 #: Env var that overrides where the built frontend is looked up. Used by
 #: tests (point it at a temp dir) and available to E2E harnesses; normal
@@ -55,6 +56,7 @@ def create_app() -> FastAPI:
     # moment a UI build exists on disk (ADR-001 §4).
     app.include_router(derive_router)
     app.include_router(search_router)
+    app.include_router(workspaces_router)
 
     dist = _ui_dist_dir()
     if dist.is_dir():

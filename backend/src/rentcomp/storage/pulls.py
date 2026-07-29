@@ -66,6 +66,7 @@ __all__ = [
     "config_digest",
     "fixture_pulls_dir",
     "load_shaped_pull",
+    "pull_exists",
 ]
 
 #: Overrides where synthetic pulls are read from (tests, E2E harnesses).
@@ -169,6 +170,39 @@ def load_shaped_pull(pull_ref: str, config: Config) -> ShapedPull:
     idempotence. Tests that rewrite a store in place call `.cache_clear()`.
     """
     return _shaped_pull(fixture_pulls_dir(), pull_ref, config, _evidence_version(pull_ref))
+
+
+def pull_exists(pull_ref: str) -> bool:
+    """Is there evidence at this ref — **without shaping any of it** (F1-S2)?
+
+    The recents index asks this once per row on every render of Home, so it has
+    to be cheap: a `stat` and a manifest read, never `load_shaped_pull`. A
+    workspace whose pull is gone is F1's "missing cache entry" edge — an error
+    row offering refresh — and answering it by deriving would blow the epic's
+    "<1s" budget to compute a boolean.
+
+    Handles all three kinds of ref (WS-1's fixtures, a real cache key, a
+    synthetic pull) here rather than at the caller, so the one place that knows
+    how a ref resolves stays the one place that knows whether it resolves.
+    """
+    try:
+        safe_ref = _safe_ref(pull_ref)
+    except PullNotFoundError:
+        return False
+
+    if safe_ref == WS1_REAL_PULL_REF:
+        return _WS1_ACTIVE_FIXTURE.is_file() and _WS1_INACTIVE_FIXTURE.is_file()
+
+    if _looks_like_cache_key(safe_ref):
+        try:
+            read_manifest(safe_ref)
+        except (CacheMissError, OSError, ValueError, KeyError):
+            return False
+        # A manifest with no bytes behind it is exactly as "not there yet" as
+        # no entry at all — the same rule `_load_cache_backed_pull` applies.
+        return bool(raw_response_paths(safe_ref))
+
+    return (fixture_pulls_dir() / f"{safe_ref}.json").is_file()
 
 
 def _evidence_version(pull_ref: str) -> str:

@@ -64,7 +64,7 @@ export default function SearchForm({ onCancel, onSubmitted }: SearchFormProps) {
 
   const errors = useMemo(() => validate(values), [values]);
   const softWarnings = useMemo(() => warnings(values), [values]);
-  const plannable = isPlannable(values);
+  const plannable = isPlannable(errors);
 
   // Serialized rather than passed as an object so the effect re-runs when the
   // request actually changes, not on every keystroke that leaves it identical.

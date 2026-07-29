@@ -274,11 +274,13 @@ export function toRequestBody(values: SearchValues): SearchRequestBody {
 /**
  * Whether the *pull parameters* are complete enough to price.
  *
- * Deliberately not `validate(...)` being empty: `sqft` is a subject attribute
- * that never reaches `SearchRequest`, so a preview that waited for it would
- * withhold the call estimate over a field that cannot change it.
+ * Deliberately not "no errors at all": `sqft` is a subject attribute that never
+ * reaches `SearchRequest`, so a preview that waited for it would withhold the
+ * call estimate over the one field that cannot possibly change it.
+ *
+ * Takes the already-computed errors rather than re-running `validate`, so the
+ * component's memo is the single evaluation per keystroke.
  */
-export function isPlannable(values: SearchValues): boolean {
-  const errors = validate(values);
+export function isPlannable(errors: FieldErrors): boolean {
   return (Object.keys(errors) as (keyof SearchValues)[]).every((key) => key === "sqft");
 }

@@ -338,6 +338,34 @@ test.describe("F2 · New Search form", () => {
     ).toContain("exact");
   });
 
+  test("re-opening NEW SEARCH prefills the subject rather than asking for it again", async ({
+    page,
+  }) => {
+    // "Prefill from subject where sensible" is the story's own wording, and
+    // §2.1 adds "default exact-match to subject" for beds and baths. On a
+    // FIRST search there is no prior subject — the form IS where the subject
+    // is defined — so the only reading with a testable consequence is the
+    // returning-user one: the fields the user just defined come back, instead
+    // of an address and a sqft they have to retype to change one number.
+    // (The other reading — that the pull's beds/baths filter defaults to the
+    // subject's own beds/baths — is a single-field form in this design, so it
+    // is satisfied by construction. Flagged to the PM as an AC ambiguity.)
+    await openSearchForm(page);
+    await fillValidSearch(page);
+    await submitButton(page).click();
+    await expect(byTestIdOr(page, "search-form", page.getByRole("form")).first()).toBeHidden({
+      timeout: 15_000,
+    });
+
+    await openSearchForm(page);
+    await expect(
+      field(page, "search-address", /address/i),
+      "re-opening NEW SEARCH lost the subject. A user narrowing a radius or widening a window " +
+        "should not have to retype an address, beds, baths and sqft to change one number",
+    ).toHaveValue(/3651 S Wood St/);
+    await expect(field(page, "search-sqft", /sq\.? ?ft|square/i)).toHaveValue("1200");
+  });
+
   test("property type defaults are editable, not fixed", async ({ page }) => {
     await openSearchForm(page);
     const townhouse = page

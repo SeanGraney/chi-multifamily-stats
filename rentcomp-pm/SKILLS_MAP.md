@@ -41,6 +41,34 @@ compliance is worse than a clean failure.
 dispatch that tells a subagent to spawn an agent — it cannot, and it will
 either skip the step or improvise. Assume the PM runs it.
 
+## Project-local skills and commands — the ones that actually matter here
+
+> **Added 2026-07-29 (owner ruling: "rewrite SKILLS_MAP to name real
+> equivalents").** The 2026-07-28 correction removed the fictional entries but
+> **overlooked the four real, project-specific ones that live in this repo.**
+> These are the highest-value entries in this file: unlike any general-purpose
+> skill, they encode *this* pipeline, *this* gate and *this* merge ritual.
+
+| What | Kind | Invoked by | When |
+|---|---|---|---|
+| `add-pipeline-stage` | **skill** (`.claude/skills/`) | dev | Adding a transformation step between raw DTOs and `DerivedState`. **Not** for bug fixes or endpoint work |
+| `/new-endpoint` | command (`.claude/commands/`) | dev | Scaffolding a FastAPI router endpoint that respects the layering rules |
+| `/sync` | command | **qa** | **QA's mandatory pre-test-run sync ritual** (`WORKFLOW.md` §4) — fetch, merge dev branch, merge main |
+| `/test` | command | qa, dev, PM | The full three-layer gate. Read the "never say plain green" caveat below before quoting its output |
+
+⚠ **`add-pipeline-stage/reference.md` was amended 2026-07-29 by the PM** to
+carry ADR-001's **Group A / Group B split** (record shaping vs curation
+derivation) and the psf/premium cut. ADR-001 flagged that amendment as a PM
+follow-up in 2026-07-26 and **it had never landed** — for three days the skill
+told any reader that `premium` belongs in the once-per-pull chain, which ADR-001
+had already ruled it cannot. Two further errors were corrected in the same pass:
+the `removal_class` ladder ended at `leased` where `models/domain.py:47` and a
+standing PM erratum both say **`confirmed`**, and `withdrawal_suspect` was
+attributed to the **window** stage (F4-S4) when F4-S8's classify stage owns it.
+**All three would have misled the F4-S4 and F4-S8 developers**, which is how the
+staleness was caught. If you use this skill and its reference disagrees with a
+story, the story and the ADR win — and tell the PM.
+
 ## Project Manager
 
 | What | Kind | When |
@@ -69,6 +97,8 @@ logic — not on pure-math stories.
 | What | Kind | When |
 |---|---|---|
 | `AGENT_DEVELOPER.md` | charter | The process. Self-review before handoff is a charter step, not a skill |
+| `add-pipeline-stage` | **skill (project-local)** | Adding a pipeline stage. **Decide Group A vs Group B first** — see the amendment note above |
+| `/new-endpoint` | **command (project-local)** | Scaffolding a FastAPI route within the layering rules |
 | `superpowers:systematic-debugging` | skill | When a QA repro resists diagnosis |
 | `superpowers:test-driven-development` | skill | Optional. QA already writes the tests first here, so this mostly restates the workflow the project imposes anyway |
 
@@ -87,6 +117,8 @@ guide.
 | What | Kind | When |
 |---|---|---|
 | `AGENT_QA.md` | charter | **The layer-decision procedure lives here and is the single most load-bearing process document in the project.** It has worked examples drawn from this product; no generic testing skill improves on it |
+| `/sync` | **command (project-local)** | **Mandatory before any test run** (`WORKFLOW.md` §4) — fetch, merge dev branch, merge main. This is the ritual, not a convenience |
+| `/test` | **command (project-local)** | The three-layer gate. Its output is never plain "green" on this machine — 3 platform failures are expected and documented (row 24a) |
 | `superpowers:test-driven-development` | skill | Optional framing for the write-red-first discipline the charter already mandates |
 | `superpowers:verification-before-completion` | skill | The end-of-project full regression pass, treated as a release |
 

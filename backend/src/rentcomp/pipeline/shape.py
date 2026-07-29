@@ -466,22 +466,16 @@ def _build_comp(chain: Sequence[Spell], suspect: bool, as_of: date, config: Conf
     )
 
     # ``gap_days`` is the off-market time the chain merged over, so it is
-    # summed with the same days-off-market rule `stitch` merged on — running
-    # latest removal, floored at zero. An overlap contributes nothing: the
-    # unit was never off market.
+    # summed through `_days_off_market` — literally the predicate `stitch`
+    # merged on, not a second copy of it that could drift from it. An overlap
+    # therefore contributes nothing: the unit was never off market.
     cut_history: list[PriceCut] = []
     gap_days_total = 0
-    observed_through: date | None = first.removed
-    for prev, nxt in zip(chain, chain[1:]):
-        if observed_through is not None:
-            gap_days_total += max(0, (nxt.listed - observed_through).days)
+    for index, nxt in enumerate(chain[1:], start=1):
+        gap_days_total += _days_off_market(chain[:index], nxt) or 0
+        prev = chain[index - 1]
         if nxt.price < prev.price:
             cut_history.append(PriceCut(on=nxt.listed, from_price=prev.price, to_price=nxt.price))
-        observed_through = (
-            None
-            if nxt.removed is None or observed_through is None
-            else max(observed_through, nxt.removed)
-        )
 
     return StitchedComp(
         address=last.address,

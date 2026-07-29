@@ -136,6 +136,22 @@ def keys_in_state(payload: dict[str, Any], state: str) -> list[str]:
     return [comp["key"] for comp in payload["comps"] if comp["state"] == state]
 
 
+def selectable(payload: dict[str, Any]) -> set[str]:
+    """Comps at a positive weight — the ones whose label is unambiguous.
+
+    ``pipeline/membership.py`` marks the precedence between "filtered" and
+    "weight 0" a ``[DEFAULT]`` and says F7-S1 may reverse it, so a comp that
+    is *both* filtered out and weight-0 may honestly carry either label. Every
+    "this filter took exactly these comps" assertion below is therefore scoped
+    to comps where only one rule can fire.
+
+    Found by mutation-testing this file: reversing that precedence killed two
+    tests here, which meant they were pinning a ``[DEFAULT]`` — a defect in
+    the test, not in the code (AGENT_QA.md's fifth smell).
+    """
+    return {comp["key"] for comp in payload["comps"] if comp["weight"] > 0.0}
+
+
 def statistics_only(payload: dict[str, Any]) -> dict[str, Any]:
     """The payload with every *label* removed — only the numbers are left.
 
@@ -282,12 +298,14 @@ def test_max_distance_takes_exactly_the_comps_beyond_it(derive, derived) -> None
     a hard-coded address list, so the metric stays a ``[DEFAULT]``."""
     bound = NEAR_ONLY["max_distance_mi"]
     payload = derive(filters=NEAR_ONLY).json()
+    scope = selectable(derived)
 
-    expected = {c["key"] for c in derived["comps"] if c["distance_mi"] > bound}
-    assert expected, "vacuous: no comp is beyond the bound"
-    assert set(keys_in_state(payload, "filtered")) == expected, (
-        f"max_distance_mi={bound} filtered {sorted(keys_in_state(payload, 'filtered'))}, "
-        f"expected exactly the comps further away than that: {sorted(expected)}"
+    expected = {c["key"] for c in derived["comps"] if c["distance_mi"] > bound} & scope
+    assert expected, "vacuous: no selectable comp is beyond the bound"
+    assert set(keys_in_state(payload, "filtered")) & scope == expected, (
+        f"max_distance_mi={bound} filtered "
+        f"{sorted(set(keys_in_state(payload, 'filtered')) & scope)}, expected exactly the "
+        f"comps further away than that: {sorted(expected)}"
     )
 
 
@@ -296,12 +314,13 @@ def test_hide_censored_takes_exactly_the_still_active_comps(derive, derived) -> 
     must key on ``censored`` and on nothing that correlates with it — a comp
     with a long DOM is not a censored comp."""
     payload = derive(filters=HIDE_CENSORED).json()
+    scope = selectable(derived)
 
-    expected = {c["key"] for c in derived["comps"] if c["censored"]}
+    expected = {c["key"] for c in derived["comps"] if c["censored"]} & scope
     assert expected, "vacuous: no censored comp in the pull"
-    assert set(keys_in_state(payload, "filtered")) == expected, (
-        f"hide_censored filtered {sorted(keys_in_state(payload, 'filtered'))}, expected "
-        f"exactly the still-active comps {sorted(expected)}"
+    assert set(keys_in_state(payload, "filtered")) & scope == expected, (
+        f"hide_censored filtered {sorted(set(keys_in_state(payload, 'filtered')) & scope)}, "
+        f"expected exactly the still-active comps {sorted(expected)}"
     )
 
 
@@ -316,13 +335,14 @@ def test_leased_only_keeps_the_comps_that_reached_the_removal_ladder(derive, der
     re-tuned, this test follows rather than fossilising a list.
     """
     payload = derive(filters=LEASED_ONLY).json()
+    scope = selectable(derived)
 
     kept = {c["key"] for c in derived["comps"] if c["removal_class"] in ("provisional", "confirmed")}
-    expected = {c["key"] for c in derived["comps"]} - kept
+    expected = ({c["key"] for c in derived["comps"]} - kept) & scope
     assert expected and kept, "vacuous: leased_only keeps everything or nothing in this pull"
-    assert set(keys_in_state(payload, "filtered")) == expected, (
-        f"leased_only filtered {sorted(keys_in_state(payload, 'filtered'))}, expected exactly "
-        f"the comps that did NOT reach provisional/confirmed: {sorted(expected)}.\n"
+    assert set(keys_in_state(payload, "filtered")) & scope == expected, (
+        f"leased_only filtered {sorted(set(keys_in_state(payload, 'filtered')) & scope)}, "
+        f"expected exactly the comps that did NOT reach provisional/confirmed: {sorted(expected)}.\n"
         "  a censored comp still present => 'still active' is being read as 'leased'\n"
         "  a pending comp still present  => a <7d removal is being counted (NORTH_STAR)"
     )
@@ -332,6 +352,7 @@ def test_filters_compose_as_a_union_of_what_each_would_take(derive, derived) -> 
     """Three filters on at once take the union, not the intersection — each
     is an independent reason a comp is out of view."""
     payload = derive(filters=COMBO).json()
+    scope = selectable(derived)
 
     expected = {
         c["key"]
@@ -339,13 +360,38 @@ def test_filters_compose_as_a_union_of_what_each_would_take(derive, derived) -> 
         if c["distance_mi"] > COMBO["max_distance_mi"]
         or c["censored"]
         or c["removal_class"] not in ("provisional", "confirmed")
-    }
-    assert set(keys_in_state(payload, "filtered")) == expected, (
+    } & scope
+    assert set(keys_in_state(payload, "filtered")) & scope == expected, (
         "with all three filters on, the filtered set is not the union of what each takes "
         "individually — an intersection would leave comps visible that the user asked to "
-        f"hide.\n  got     : {sorted(keys_in_state(payload, 'filtered'))}\n"
+        f"hide.\n  got     : {sorted(set(keys_in_state(payload, 'filtered')) & scope)}\n"
         f"  expected: {sorted(expected)}"
     )
+
+
+def test_a_comp_no_filter_matches_is_never_labelled_filtered(derive, derived) -> None:
+    """The other side of the same coin, and it holds under either precedence:
+    whatever a filter does to the comps it matches, a comp it does not match
+    must never be labelled ``filtered``. Otherwise the "N filtered · show"
+    footer would offer the user comps nothing hid, and the rust pins on the
+    map would be telling them their filter did something it did not.
+    """
+    for name, filters in NAMED_FILTERS:
+        payload = derive(filters=filters).json()
+        for comp in payload["comps"]:
+            reference = comps_by_key(derived)[comp["key"]]
+            matched = (
+                (filters["max_distance_mi"] is not None
+                 and reference["distance_mi"] > filters["max_distance_mi"])
+                or (filters["hide_censored"] and reference["censored"])
+                or (filters["leased_only"]
+                    and reference["removal_class"] not in ("provisional", "confirmed"))
+            )
+            if not matched:
+                assert comp["state"] != "filtered", (
+                    f"[{name}] comp {comp['key']!r} is labelled 'filtered' but no active "
+                    "filter matches it"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -425,10 +471,18 @@ def test_a_filter_that_takes_everything_leaves_no_anchor_and_no_price_test(deriv
     payload = derive(filters=EVERYTHING, candidate_rent=2400.0).json()
     breakdown = payload["breakdown"]
 
-    assert breakdown["filtered"] == breakdown["pulled"], (
-        "a 0.0mi radius left comps unfiltered"
+    assert breakdown["included"] == 0, (
+        "a 0.0mi radius left comps included"
     )
-    assert breakdown["included"] == 0 and breakdown["excluded"] == 0
+    # Precedence-agnostic: a comp that is both filtered out and weight-0 may
+    # honestly carry either label ([DEFAULT]), so what is asserted is that
+    # every *selectable* comp was taken and that nothing is left included.
+    # (a filtered comp keeps the weight the client sent, so `selectable` reads
+    # the same set off this payload as off an unfiltered one)
+    assert selectable(payload) <= set(keys_in_state(payload, "filtered")), (
+        f"comps {sorted(selectable(payload) - set(keys_in_state(payload, 'filtered')))} "
+        "were at a positive weight and a 0.0mi radius did not take them"
+    )
     assert payload["anchor"] is None, (
         f"an anchor ({payload['anchor']}) was derived with every comp filtered out — it "
         "would be a number resting on no evidence at all"

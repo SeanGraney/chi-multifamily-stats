@@ -40,6 +40,7 @@ import rentcomp
 from rentcomp.client.pull import (
     _held_as_of,
     _page_sig,
+    _read_manifest_or_none,
     _query_sig_of,
     pull_ref_for,
     pull_status,
@@ -52,6 +53,8 @@ from rentcomp.client.rentcast import (
     fixture_signature,
 )
 from rentcomp.storage.cache import (
+    CORRUPT_MANIFEST_ERRORS,
+    CacheMissError,
     Manifest,
     QueryStatus,
     manifest_fingerprint,
@@ -488,6 +491,103 @@ def test_bytes_on_disk_never_promote_a_window_the_manifest_recorded_as_failed(
     assert no_network == []
 
 
+def test_an_unreadable_source_with_nothing_filed_leaves_the_window_owed(
+    fixture_mode, no_network
+) -> None:
+    """The guard on the not-owed answer: **bytes on disk, or it is still owed.**
+
+    Fixture mode reaches the same "this body is unusable" error through a code
+    path where the sink never fired, so nothing was written. Reading that as
+    "we hold an answer we cannot use" would make the window permanently
+    unbuyable — not missing-and-priced, but missing and quoted at zero calls,
+    which no amount of retrying can ever resolve. The not-owed answer is only
+    ever available *because* the bytes are safe (D24).
+
+    Found by mutation: removing this guard survived both QA's suite and every
+    other test in this file.
+    """
+    queries = _seed(fixture_mode)
+    corrupt = fixture_mode / f"{fixture_signature(queries[0].params)}.json"
+    corrupt.write_bytes(b'[{"id": "truncated"')
+
+    outcome = run_pull(**SEARCH, today=TODAY)
+
+    assert outcome.complete is False
+    assert outcome.calls_to_complete == 1, (
+        "a window whose source could not be read, and whose bytes were never filed, was "
+        "quoted at 0 calls to complete. Nothing on disk can answer it, so it is owed."
+    )
+    assert not [
+        path
+        for path in raw_response_paths(outcome.pull_ref)
+        if _query_sig_of(path.stem) == f"y{queries[0].year}-{queries[0].status.lower()}"
+    ], "an unusable body with nothing behind it filed something anyway"
+    assert no_network == []
+
+
+def test_an_attempt_that_delivered_nothing_at_all_leaves_the_evidence_date_alone(
+    fixture_mode, no_network
+) -> None:
+    """The ruling's negative case with the arrival signal isolated.
+
+    Every window fails, so no byte is written and no response is filed. If the
+    manifest is stamped with the day of the attempt anyway, every censored
+    comp's `effective_dom` grows by the gap for a market nobody looked at.
+    """
+    _seed(fixture_mode)
+    first = run_pull(**SEARCH, today=TODAY)
+    assert first.complete is True, "the setup did not hold"
+
+    for saved in fixture_mode.glob("*.json"):
+        saved.unlink()
+    retry = run_pull(**SEARCH, today=A_MONTH_LATER, force_refresh=True)
+
+    assert retry.complete is False, "the setup did not hold: something arrived"
+    assert read_manifest(first.pull_ref).as_of == TODAY
+    assert no_network == []
+
+
+def test_the_evidence_date_on_disk_is_carried_forward_and_not_re_derived(home) -> None:
+    """`_held_as_of` reads the manifest when there is one.
+
+    Otherwise a run that owes a window starts from its own calendar, and the
+    first response to arrive is irrelevant — the date would already have moved.
+    """
+    key = "7" * 64
+    write_manifest(key, as_of=TODAY, window=("01-01", "12-31"))
+
+    assert _held_as_of(key, read_manifest(key), A_MONTH_LATER) == TODAY
+
+
+@pytest.mark.parametrize(
+    "error_type", (CacheMissError, *CORRUPT_MANIFEST_ERRORS), ids=lambda t: t.__name__
+)
+def test_no_type_of_unreadable_manifest_reaches_the_resume_diff(monkeypatch, error_type) -> None:
+    """The shared tuple, parametrised, so a tenth shape is covered by adding it
+    to `storage/cache.py` and nothing else.
+
+    This is the sixth call site in that family on this project, and the
+    previous five drifted apart one `except` clause at a time — `AttributeError`
+    (a `queries` list of non-records) and `TypeError` (a `window` that is not a
+    sequence) walked straight out of `run_pull` and reached every caller as an
+    anonymous 500. Driven off `CORRUPT_MANIFEST_ERRORS` itself rather than off
+    a list of corrupt manifest bodies: the claim is about the error types the
+    shared name promises to cover, and a body that stopped raising one of them
+    would silently stop testing it.
+
+    Asserted on `_read_manifest_or_none` rather than on `run_pull`, because
+    `pull_status` reads the manifest too and is *entitled* to raise there —
+    `api/search.py` refuses a corrupt entry loudly rather than re-pulling
+    around it (F2-S1), and this test must not quietly demand the opposite.
+    """
+    monkeypatch.setattr(
+        "rentcomp.client.pull.read_manifest",
+        lambda key: (_ for _ in ()).throw(error_type("simulated unreadable manifest")),
+    )
+
+    assert _read_manifest_or_none("5" * 64) is None
+
+
 def test_a_lost_manifest_is_rebuilt_from_the_store_rather_than_re_bought(
     live_env, no_network, home
 ) -> None:
@@ -640,6 +740,30 @@ def test_the_manifest_fingerprint_moves_with_content_and_not_with_the_clock(home
 def test_a_ref_with_no_manifest_fingerprints_as_nothing() -> None:
     assert manifest_fingerprint("8" * 64) == ""
     assert manifest_fingerprint("../escape") == ""
+
+
+def test_the_memo_key_carries_the_manifest_and_not_only_the_raw_files(home) -> None:
+    """The half `_evidence_version` used to miss, asserted at the key itself.
+
+    `_load_cache_backed_pull` hands the manifest's `as_of` and `window`
+    straight to `shape_raw_pull`, so they are inputs to the shaped result every
+    bit as much as the responses are. A key that covered only `raw/` served
+    numbers derived from a date no longer on disk, for as long as the process
+    kept running.
+    """
+    from rentcomp.storage.pulls import _evidence_version
+
+    key = "6" * 64
+    write_raw_response(key, "y2025-active-off000", b"[]", meta={"sig": "y2025-active"})
+    write_manifest(key, as_of=TODAY, window=("01-01", "12-31"))
+    before = _evidence_version(key)
+
+    write_manifest(key, as_of=A_MONTH_LATER, window=("01-01", "12-31"))
+
+    assert _evidence_version(key) != before, (
+        "the manifest changed and the memo key did not, so a warm process keeps serving the "
+        "old evidence date"
+    )
 
 
 # ===========================================================================

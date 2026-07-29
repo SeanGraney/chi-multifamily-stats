@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { components } from "../api/schema";
-import { useDerive } from "../api/useDerive";
+import { useDerive, type DeriveStatus } from "../api/useDerive";
 
 type DerivedState = components["schemas"]["DerivedState"];
 type DeriveRequest = components["schemas"]["DeriveRequest"];
@@ -61,7 +61,7 @@ export default function Results() {
    */
   const [weights, setWeights] = useState<Record<string, number>>({});
 
-  const { derived, error } = useDerive({
+  const { derived, status, error } = useDerive({
     pull_ref: PULL_REF,
     subject: SUBJECT,
     weights,
@@ -124,6 +124,7 @@ export default function Results() {
         pulled
       </p>
 
+      <DeriveStatusLine status={status} error={error} />
       <AnchorPanel anchor={derived.anchor} />
       <CompList
         comps={derived.comps}
@@ -137,6 +138,36 @@ export default function Results() {
       <PriceTestPanel priceTest={derived.price_test} />
     </section>
   );
+}
+
+/**
+ * Whether the panels below are still the answer to the edit the user just
+ * made. F5's success criterion is "no hidden state": numbers left standing
+ * after a re-derive failed, or while one is in flight, are exactly that — the
+ * screen looks settled and is not.
+ */
+function DeriveStatusLine({
+  status,
+  error,
+}: {
+  status: DeriveStatus;
+  error: string | null;
+}) {
+  if (status === "error") {
+    return (
+      <p data-testid="derive-status" className="mt-2 text-xs text-rust">
+        Re-derive failed — the numbers below are from before your last edit: {error}
+      </p>
+    );
+  }
+  if (status === "deriving") {
+    return (
+      <p data-testid="derive-status" className="mt-2 text-xs text-grey">
+        Re-deriving...
+      </p>
+    );
+  }
+  return null;
 }
 
 function AnchorPanel({ anchor }: { anchor: DerivedState["anchor"] }) {

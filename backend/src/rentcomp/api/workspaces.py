@@ -165,10 +165,15 @@ def _missing_evidence(pull_ref: str) -> str | None:
     A presence check, never a derivation (D5, and the epic's "<1s, zero API
     calls"): serving an `anchor` on every row would mean deriving every stored
     workspace on Home's mount.
+
+    "Missing **or** unreadable", in one message, because `pull_exists` cannot
+    tell a caller which without doing the read twice — and because the two are
+    the same fact to the user: the row cannot be opened, the curation survived,
+    and a full re-pull is the only thing that brings the evidence back.
     """
     if pull_exists(pull_ref):
         return None
     return (
-        f"the evidence this workspace curates ({pull_ref}) is no longer on disk. "
-        "Your curation is intact — refresh to run the search again."
+        f"the evidence this workspace curates ({pull_ref}) is missing from disk or "
+        "cannot be read. Your curation is intact — refresh to run the search again."
     )

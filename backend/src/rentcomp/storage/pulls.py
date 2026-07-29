@@ -55,7 +55,12 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from rentcomp.models.domain import StitchedComp
 from rentcomp.pipeline.shape import shape_raw_pull
-from rentcomp.storage.cache import CacheMissError, raw_response_paths, read_manifest
+from rentcomp.storage.cache import (
+    CORRUPT_MANIFEST_ERRORS,
+    CacheMissError,
+    raw_response_paths,
+    read_manifest,
+)
 from rentcomp.storage.config import Config
 
 __all__ = [
@@ -184,6 +189,23 @@ def pull_exists(pull_ref: str) -> bool:
     Handles all three kinds of ref (WS-1's fixtures, a real cache key, a
     synthetic pull) here rather than at the caller, so the one place that knows
     how a ref resolves stays the one place that knows whether it resolves.
+
+    **Total: it answers `False` rather than raising, for every shape of broken
+    entry.** Its one caller is the recents index, which renders Home; an
+    exception escaping here is not a bad row, it is no Home screen at all —
+    the "never a crash" the AC forbids. `CORRUPT_MANIFEST_ERRORS` is imported
+    rather than spelled out for the reason F2-S1 introduced it: a hand-written
+    `(OSError, ValueError, KeyError)` does NOT catch the `TypeError` /
+    `AttributeError` that a right-shape-wrong-types manifest raises inside
+    coercion, which is how two corruption shapes escaped as anonymous 500s in
+    F4-S9. Measured here before the tuple was used: a manifest with
+    `"as_of": 17` raised `TypeError: fromisoformat: argument must be str`.
+
+    False is also the honest answer for a corrupt entry, not merely the safe
+    one: an entry that cannot be read cannot be derived from either, so the row
+    is un-openable and gets the same error-and-offer-refresh treatment as one
+    that is gone. Nothing here re-fetches to work around it (D24) — refresh
+    stays the user's decision.
     """
     try:
         safe_ref = _safe_ref(pull_ref)
@@ -196,13 +218,16 @@ def pull_exists(pull_ref: str) -> bool:
     if _looks_like_cache_key(safe_ref):
         try:
             read_manifest(safe_ref)
-        except (CacheMissError, OSError, ValueError, KeyError):
+            # A manifest with no bytes behind it is exactly as "not there yet"
+            # as no entry at all — the rule `_load_cache_backed_pull` applies.
+            return bool(raw_response_paths(safe_ref))
+        except (CacheMissError, *CORRUPT_MANIFEST_ERRORS):
             return False
-        # A manifest with no bytes behind it is exactly as "not there yet" as
-        # no entry at all — the same rule `_load_cache_backed_pull` applies.
-        return bool(raw_response_paths(safe_ref))
 
-    return (fixture_pulls_dir() / f"{safe_ref}.json").is_file()
+    try:
+        return (fixture_pulls_dir() / f"{safe_ref}.json").is_file()
+    except OSError:
+        return False
 
 
 def _evidence_version(pull_ref: str) -> str:

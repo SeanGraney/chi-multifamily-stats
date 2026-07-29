@@ -523,6 +523,70 @@ def test_a_merged_chains_dom_ends_at_the_latest_removal_it_observed(spec) -> Non
     )
 
 
+#: Chains whose spells OVERLAP and then re-list, so that "off market since the
+#: previous spell's removal" and "off market since the chain's latest removal"
+#: give different totals. Each row is (segments, true_off_market, naive_per_pair).
+#:
+#: This shape does not occur in the committed pull — every real overlapping
+#: chain has `gap_days == 0` under both readings — which is exactly why it
+#: needs pinning here: a dormant rule regresses silently.
+_OVERLAP_THEN_RELIST = [
+    pytest.param(
+        [(date(2025, 1, 1), date(2025, 6, 1)), (date(2025, 2, 1), date(2025, 3, 1)), (date(2025, 6, 21), date(2025, 7, 1))],
+        20,
+        112,
+        id="one-overlap-then-a-20d-gap",
+    ),
+    pytest.param(
+        [(date(2025, 1, 1), date(2025, 9, 1)), (date(2025, 2, 1), date(2025, 3, 1)), (date(2025, 3, 10), date(2025, 4, 1))],
+        0,
+        9,
+        id="two-spells-swallowed-whole-never-off-market",
+    ),
+    pytest.param(
+        [(date(2025, 1, 1), date(2025, 5, 1)), (date(2025, 4, 1), date(2025, 4, 20)), (date(2025, 5, 11), date(2025, 6, 1)), (date(2025, 6, 10), date(2025, 7, 1))],
+        19,
+        30,
+        id="overlap-then-two-real-gaps",
+    ),
+]
+
+
+@pytest.mark.parametrize(("segments", "true_off_market", "naive_per_pair"), _OVERLAP_THEN_RELIST)
+def test_gap_days_is_time_the_unit_was_actually_off_market(
+    segments, true_off_market, naive_per_pair
+) -> None:
+    """`gapDays` is "retained for badges" (F4-S3) — the row badge tells the
+    user how long this unit sat off market between listings, so it must be
+    time the unit was actually off market.
+
+    Summing per *adjacent pair* from the previous spell's removal double-counts
+    across an overlap: it charges the unit for days it was demonstrably still
+    listed, and can report more off-market days than the chain has days. Here
+    the two readings disagree by construction, and the naive total is asserted
+    to be wrong explicitly so this test cannot silently start agreeing with it.
+
+    Written as a second, independent guard on a rule that is **dormant on the
+    committed pull** (every real overlapping chain reports `gap_days == 0`
+    either way). A dormant rule defended by a single test is one careless edit
+    from regressing unnoticed; QA owns that risk, so this lives beside the
+    developer's own case rather than relying on it."""
+    assert true_off_market != naive_per_pair, "test-input defect: the readings must disagree"
+
+    as_of = max(removed for _, removed in segments) + timedelta(days=60)
+    comp = _one_comp([(listed, removed, 2000.0) for listed, removed in segments], as_of)
+
+    assert comp.gap_days == true_off_market, (
+        f"gap_days={comp.gap_days}, expected {true_off_market}. "
+        f"{naive_per_pair} is the per-adjacent-pair total, which counts days the unit was "
+        f"still listed under another id."
+    )
+    assert comp.gap_days <= comp.effective_dom, (
+        f"gap_days={comp.gap_days} exceeds the chain's own span {comp.effective_dom} — the "
+        "unit cannot be off market for longer than the chain lasted"
+    )
+
+
 # ---------------------------------------------------------------------------
 # the merged record's remaining defined fields
 # ---------------------------------------------------------------------------

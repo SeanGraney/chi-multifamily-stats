@@ -22,24 +22,58 @@ a DOM, and a censoring flag. It does not promise a `psf`* — 14.7% of the real
 pull has no `squareFootage`, and those records must survive into the response
 with `psf=None` rather than be dropped or given a fabricated zero.
 
-`Spell` is intentionally absent: it is the stitcher's intermediate artifact
-and nothing in the derivation graph consumes it. F4-S3 adds it.
+`Spell` was intentionally absent through F4-S2 — it is the stitcher's
+intermediate artifact and nothing in the derivation graph consumes it. F4-S3
+adds it here, as that docstring promised: a domain type defined inside
+`pipeline/` is our-truth data living in the derivation layer, which is how a
+DTO starts leaking past the pipeline boundary. `pipeline.shape` re-exports
+the same class object, so nothing that already imports it has to move.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["PriceCut", "RemovalClass", "StitchedComp"]
+__all__ = ["PriceCut", "RemovalClass", "Spell", "StitchedComp"]
 
 #: The removal-confidence ladder (NORTH_STAR, F4-S8). `None` — not a member of
 #: this Literal — means *still active*: a censored listing has not been
 #: removed, let alone leased. ARCHITECTURE.md §3's `leased` spelling is an
 #: erratum (PM ruling, F0-S2); the ladder ends at `confirmed`.
 RemovalClass = Literal["pending", "provisional", "confirmed"]
+
+
+@dataclass(frozen=True, slots=True)
+class Spell:
+    """One reported listing interval, before stitching (F4-S2/F4-S3).
+
+    ``removed is None`` means the spell was still open when the pull was
+    taken — the censored case NORTH_STAR calls the single most important
+    distinction in the system. The fields past ``price`` are the record
+    attributes the spell was read from; they ride along so the stitcher can
+    populate a `StitchedComp` without a second pass over the raw dicts.
+
+    A plain frozen dataclass rather than a `BaseModel`: nothing crosses a
+    trust boundary here (its values were already validated at the DTO edge),
+    it is constructed once per spell over every record in a pull, and it is
+    never serialized. `StitchedComp` above is the model — this is the
+    intermediate the stitcher folds into one.
+    """
+
+    listed: date
+    removed: date | None
+    price: float
+    address: str
+    unit: str | None
+    lat: float
+    lng: float
+    beds: float
+    baths: float | None
+    sqft: float | None
 
 
 class PriceCut(BaseModel):

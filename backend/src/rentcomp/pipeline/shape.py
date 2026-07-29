@@ -8,13 +8,20 @@ filter + cohort assignment. Internal structure below this seam is a
 functions, so this module keeps everything behind one composed call rather
 than inventing importable internals nobody pinned.
 
-``extract_spells``/``Spell`` are the one exception (F4-S2): ADR-002 note 6
+``extract_spells``/``Spell`` are the first exception (F4-S2): ADR-002 note 6
 recorded that this module owed a Layer-1 seam, and F4-S2's AC is stated in
 *spell rows* ("a record whose history holds two prior spells yields three
 spell rows") — a claim ``shape_raw_pull`` cannot express, since it exposes
 only post-stitch comps. Asserting it through the stitcher would make an
-F4-S2 acceptance criterion depend on F4-S3's merge threshold. F4-S3's own
-``stitch`` seam is its story's to add, not this one's.
+F4-S2 acceptance criterion depend on F4-S3's merge threshold.
+
+``stitch`` is the second (F4-S3), for the mirror-image reason: F4-S3's first
+acceptance criterion is "threshold 0 => no merging", and
+``Config.stitch_gap_days`` is ``Field(ge=7, le=60)`` — so that criterion is
+literally unreachable through ``shape_raw_pull``. The seam takes a plain
+``int`` and returns chains rather than comps; see its own docstring.
+``shape_raw_pull`` calls it, so it is the real path and not a second
+implementation that can drift.
 
 INPUT SHAPE
 -----------
@@ -39,13 +46,15 @@ ALGORITHM (one pass, four stages, all inside this function/its helpers)
    top-level (listedDate/removedDate/price) plus one spell per ``history``
    entry, collapsed to one row per listing start (see ``extract_spells``).
 4. **Stitch** (F4-S3): spells within one group, sorted chronologically, merge
-   into a chain whenever the next spell's ``listedDate`` is *less than*
-   ``config.stitch_gap_days`` after the previous spell's ``removedDate``
-   (strict ``<`` — a gap exactly at the threshold does NOT merge). Each
-   maximal chain becomes one `StitchedComp` candidate.
-5. **Classify** (F4-S8): a chain ending in an active spell is ``censored``
-   (removal_class=None), DOM measured to ``as_of``. A chain ending in a
-   removal is classified off ``as_of - removed_date``: < ``provisional_lease_days``
+   into a chain whenever the unit's **days off market** —
+   ``max(0, nextListed - the latest removal the chain has observed)`` — is
+   *strictly less than* ``config.stitch_gap_days`` (a gap exactly at the
+   threshold does NOT merge; an overlap is zero days off market, not a
+   negative gap). Each maximal chain becomes one `StitchedComp` candidate.
+   See ``stitch``.
+5. **Classify** (F4-S8): a chain that is still open is ``censored``
+   (removal_class=None), DOM measured to ``as_of``. A closed chain is
+   classified off ``as_of - _chain_end(chain)``: < ``provisional_lease_days``
    -> pending (excluded downstream), < 42d -> provisional (counted+marked),
    else -> confirmed. A confirmed spell whose group re-lists 42d-6mo later
    (a *separate* chain, since anything closer would have stitched) is
@@ -60,14 +69,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import date, datetime
 
-from rentcomp.models.domain import PriceCut, StitchedComp
+from rentcomp.models.domain import PriceCut, Spell, StitchedComp
 from rentcomp.pipeline.keys import comp_key
 from rentcomp.storage.config import Config
 
-__all__ = ["Spell", "extract_spells", "shape_raw_pull"]
+__all__ = ["Spell", "extract_spells", "shape_raw_pull", "stitch"]
 
 #: F4-S8 [INVARIANT]: the confirmed rung of the removal ladder — a fixed
 #: 42 days, from the story text, not a configurable knob (only
@@ -85,29 +93,6 @@ WITHDRAWAL_SUSPECT_MIN_DAYS = 42
 #: config knob) into a day count. Not date-arithmetic-exact (no calendar
 #: lookup) — "6 months" is already an approximation in the spec text.
 _DAYS_PER_MONTH = 30
-
-
-@dataclass(frozen=True, slots=True)
-class Spell:
-    """One reported listing interval, before stitching (F4-S2).
-
-    ``removed is None`` means the spell was still open when the pull was
-    taken — the censored case NORTH_STAR calls the single most important
-    distinction in the system. The fields past ``price`` are the record
-    attributes the spell was read from; they ride along so ``_build_comp``
-    can populate a `StitchedComp` without a second pass over the raw dicts.
-    """
-
-    listed: date
-    removed: date | None
-    price: float
-    address: str
-    unit: str | None
-    lat: float
-    lng: float
-    beds: float
-    baths: float | None
-    sqft: float | None
 
 
 def shape_raw_pull(
@@ -132,7 +117,7 @@ def shape_raw_pull(
         spells = extract_spells(groups[key])
         if not spells:
             continue
-        chains = _stitch(spells, config.stitch_gap_days)
+        chains = stitch(spells, config.stitch_gap_days)
         suspects = _withdrawal_suspect_flags(chains, config.withdrawal_suspect_months)
         for chain, suspect in zip(chains, suspects, strict=True):
             start = chain[0].listed
@@ -272,40 +257,165 @@ def extract_spells(records: Sequence[dict]) -> tuple[Spell, ...]:
     return tuple(best[listed] for listed in sorted(best))
 
 
-def _completeness(spell: Spell) -> tuple[bool, date, float]:
-    """Total order over two observations of the same listing start.
+def _completeness(spell: Spell) -> tuple[bool, date, int, float]:
+    """Total order over two observations of the same listing start; the
+    greater one wins.
 
-    Value-derived only — never a position in the input — so `extract_spells`
-    returns the same rows whichever response a duplicated listing arrived in.
-    The trailing ``price`` is a deterministic tie-break with no semantic
-    claim behind it; the two components before it are the semantic ones.
+    Every component is derived from the spell's own values, so
+    `extract_spells` returns the same rows whichever response a duplicated
+    listing arrived in. That claim is only true *with* the third component
+    below: through F4-S2 this function ordered on ``(removed is not None,
+    removed, price)`` alone, and two observations agreeing on both of those
+    were resolved first-seen-wins — i.e. by arrival order, in a function
+    whose docstring claimed the opposite. (Corrected here, PM ruling P1a.)
+
+    The components, in order:
+
+    1. ``removed is not None`` — an observed removal beats "still active".
+    2. ``removed`` — the later of two observed removals is the more recent
+       observation of the same listing. `[DEFAULT]`.
+    3. **field completeness** — the count of optional attributes this
+       observation actually reported. This is the thing the function is
+       named for (PM ruling P1b). It can only ever prefer a *reported* value
+       over an absent one, never invent one, so it is strictly more evidence
+       and never less; and `sqft` is not a cosmetic ride-along, since a
+       missing-sqft comp is default-excluded from every cohort median
+       (F4-S5) and therefore from `premium`. It sorts **below** both removal
+       components deliberately: a completeness score that outranked them
+       would let a richly-populated but still-active observation beat one
+       that saw the unit removed, censoring a comp that actually leased —
+       the distinction NORTH_STAR calls the most important in the system.
+    4. ``price`` — a deterministic last-resort tie-break with no semantic
+       *justification*, but a real semantic *consequence*: it prefers the
+       higher price, which biases `initial_ask`, the premium numerator,
+       upward. It is last so that anything with a reason outranks it.
     """
-    return (spell.removed is not None, spell.removed or date.min, spell.price)
+    reported = sum(field is not None for field in (spell.unit, spell.baths, spell.sqft))
+    return (spell.removed is not None, spell.removed or date.min, reported, spell.price)
 
 
-def _stitch(spells: Sequence[Spell], stitch_gap_days: int) -> list[list[Spell]]:
-    """F4-S3: merge chronologically adjacent spells whose gap is strictly
-    less than ``stitch_gap_days``."""
-    chains: list[list[Spell]] = [[spells[0]]]
-    for spell in spells[1:]:
-        last = chains[-1][-1]
-        if last.removed is not None and (spell.listed - last.removed).days < stitch_gap_days:
+def stitch(spells: Sequence[Spell], stitch_gap_days: int) -> tuple[tuple[Spell, ...], ...]:
+    """F4-S3 [INVARIANT]: group ``spells`` into maximal continuous-vacancy
+    chains. Returns the chains in listed order — a partition of the input,
+    preserving order, losing and duplicating nothing.
+
+    ``stitch_gap_days`` is a plain ``int``, deliberately, and not a `Config`:
+    `Config.stitch_gap_days` is ``Field(ge=7, le=60)``, so the story's first
+    acceptance criterion ("threshold 0 => no merging") is *unreachable*
+    through a `Config`-shaped seam. The chains, not `StitchedComp`s, are the
+    return value for the same reason — how spells group is independent of the
+    DOM rule applied to a group, and asserting one through the other would
+    couple two separate acceptance criteria.
+
+    THE MERGE RULE, AND WHY IT IS ``max(0, gap)``
+    ---------------------------------------------
+    The story states the rule twice::
+
+        merge consecutive spells where gap = nextListed - prevRemoved < threshold
+        Off market >= threshold => prior spell is complete
+
+    Read as raw signed subtraction the first clause is also true of every
+    *negative* gap, so at ``threshold = 0`` two overlapping spells still
+    merge — contradicting the story's own AC1. The second clause is decisive
+    and reconciles them: what the threshold measures is **days off market**,
+    and a unit whose next listing began before the previous one ended was
+    never off market at all. So::
+
+        days_off_market = max(0, nextListed - the latest removal observed
+                                  so far in the chain)
+        merge  <=>  days_off_market < threshold
+
+    and every clause lines up: threshold 0 merges nothing (no amount of
+    off-market time is strictly less than zero); gap 41 merges and gap 42
+    does not at the default; contiguous price-change segments (gap 0) merge;
+    and overlapping observations of one unit merge, which is what keeps
+    F4-S2's four de-duplicated units from being double-counted again.
+
+    Measured over the committed 539-record pull, the three candidate readings
+    give 618/624/624 chains at threshold 0 and 567/573/567 at threshold 42
+    for ``gap < t`` / ``0 <= gap < t`` / ``max(0, gap) < t`` respectively.
+    Only this one satisfies AC1 *and* leaves the evidence base at the 567
+    comps F4-S2 established; the middle one is an F4-S2 regression wearing an
+    F4-S3 fix. (PM ruling E1 — disambiguation of a self-contradictory
+    `[INVARIANT]`, not a change to it.)
+
+    The comparison is against the chain's *latest observed removal*, not its
+    most recently listed spell's removal, for the same reason `_chain_end`
+    is: once two spells in a chain overlap, the last spell by listed date is
+    not the last spell to end.
+
+    An **open** spell (``removed is None``) ends its chain: a unit still on
+    market has no off-market days to measure a successor against. On this
+    pull no group ever reports an open spell that is not last by listed date,
+    so this is the unchanged pre-existing behaviour rather than new
+    behaviour invented for a case that does not occur (PM ruling E6). It is
+    also what makes ``censored`` unambiguous below: an open spell is always
+    its chain's last spell, so "the chain ends open" and "the chain contains
+    an open spell" cannot disagree.
+    """
+    chains: list[list[Spell]] = []
+    for spell in spells:
+        off_market = _days_off_market(chains[-1], spell) if chains else None
+        if off_market is not None and off_market < stitch_gap_days:
             chains[-1].append(spell)
         else:
             chains.append([spell])
-    return chains
+    return tuple(tuple(chain) for chain in chains)
+
+
+def _chain_end(chain: Sequence[Spell]) -> date | None:
+    """The date a chain's vacancy was last observed to run to, or ``None``
+    while it is still open.
+
+    F4-S3 [INVARIANT]: "effectiveDOM = **final removal** - first listed". The
+    final removal is the *latest* removal the chain observed, which is not
+    ``chain[-1].removed`` once any two of its spells overlap — the last spell
+    by listed date can be the first to end. Two real comps were under-
+    reported by five to six weeks by that reading (`2350 S Leavitt St 1R`
+    91 -> 128, `2453 W 46th Pl 1` 165 -> 205), and `effective_dom` is the
+    kNN target and the Kaplan-Meier event time, so a truncated value tells
+    the survival curve a unit leased six weeks before it did.
+    """
+    end = None
+    for spell in chain:
+        if spell.removed is None:
+            return None
+        end = spell.removed if end is None else max(end, spell.removed)
+    return end
+
+
+def _days_off_market(chain: Sequence[Spell], nxt: Spell) -> int | None:
+    """Days the unit was off market between ``chain`` and ``nxt`` — never
+    negative, and measured from the chain's latest observed removal.
+
+    ``None`` — "unmeasurable", not "zero" — while the chain is still open,
+    which is what ends it (see `stitch`).
+    """
+    end = _chain_end(chain)
+    if end is None:
+        return None
+    return max(0, (nxt.listed - end).days)
 
 
 def _withdrawal_suspect_flags(chains: Sequence[Sequence[Spell]], months: int) -> list[bool]:
     """F4-S8: a completed chain flags suspect iff the group's NEXT chain
-    starts 6 weeks-6 months after it ended."""
+    starts 6 weeks-6 months after it ended.
+
+    "After it ended" is `_chain_end` — the same latest-observed-removal rule
+    the chain's DOM uses, not ``chains[i][-1].removed``. That expression is
+    BUG-2's, and measuring the suspicion window from a truncated end would
+    inflate the gap and mis-flag a chain that overlapped its own tail. Not
+    reachable on today's pull (no group has both an overlapping chain and a
+    6-week-to-6-month re-list), but F4-S8 is the next story to lean on it —
+    PM ruling E4, fixed in the same pass rather than inherited.
+    """
     flags = [False] * len(chains)
     upper = months * _DAYS_PER_MONTH
     for i in range(len(chains) - 1):
-        last = chains[i][-1]
-        if last.removed is None:
+        end = _chain_end(chains[i])
+        if end is None:
             continue  # censored, not a "complete" spell
-        gap = (chains[i + 1][0].listed - last.removed).days
+        gap = (chains[i + 1][0].listed - end).days
         if WITHDRAWAL_SUSPECT_MIN_DAYS <= gap < upper:
             flags[i] = True
     return flags
@@ -336,18 +446,34 @@ def _mmdd(value: str) -> tuple[int, int]:
 
 
 def _build_comp(chain: Sequence[Spell], suspect: bool, as_of: date, config: Config) -> StitchedComp:
+    """Fold one chain into the comp the derivation graph consumes.
+
+    The chain's *end* is `_chain_end`, its latest observed removal (F4-S3
+    "effectiveDOM = final removal - first listed"). Everything else still
+    reads ``chain[-1]``, deliberately: the identity/geometry fields
+    (address, unit, lat, lng, beds, baths, sqft) are outside this story's
+    scope, and redefining "last" for them too would move
+    `2350 S Leavitt St 1R` from ``sqft=None`` to ``sqft=700`` — i.e. from
+    default-excluded to counted in every cohort median behind `premium`.
+    That is a change to the premium population, not to DOM correctness, and
+    it is queued as its own row (PM ruling E2).
+    """
     first, last = chain[0], chain[-1]
-    censored = last.removed is None
-    end_date = last.removed if last.removed is not None else as_of
+    end_date = _chain_end(chain)
+    censored = end_date is None
     removal_class = (
-        None if censored else _classify_removal(last.removed, as_of, config.provisional_lease_days)
+        None if end_date is None else _classify_removal(end_date, as_of, config.provisional_lease_days)
     )
 
+    # ``gap_days`` is the off-market time the chain merged over, so it is
+    # summed through `_days_off_market` — literally the predicate `stitch`
+    # merged on, not a second copy of it that could drift from it. An overlap
+    # therefore contributes nothing: the unit was never off market.
     cut_history: list[PriceCut] = []
     gap_days_total = 0
-    for prev, nxt in zip(chain, chain[1:]):
-        if prev.removed is not None:
-            gap_days_total += max(0, (nxt.listed - prev.removed).days)
+    for index, nxt in enumerate(chain[1:], start=1):
+        gap_days_total += _days_off_market(chain[:index], nxt) or 0
+        prev = chain[index - 1]
         if nxt.price < prev.price:
             cut_history.append(PriceCut(on=nxt.listed, from_price=prev.price, to_price=nxt.price))
 
@@ -360,7 +486,9 @@ def _build_comp(chain: Sequence[Spell], suspect: bool, as_of: date, config: Conf
         baths=last.baths,
         sqft=last.sqft,
         initial_ask=first.price,
-        effective_dom=(end_date - first.listed).days,
+        # A censored chain's DOM is a floor measured to the PULL date (owner
+        # ruling 1), never the wall clock.
+        effective_dom=((as_of if end_date is None else end_date) - first.listed).days,
         censored=censored,
         removal_class=removal_class,
         cohort_year=first.listed.year,

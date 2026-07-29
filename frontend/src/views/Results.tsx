@@ -1,95 +1,174 @@
-import { useEffect, useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { components } from "../api/schema";
+import { useDerive, type DeriveStatus } from "../api/useDerive";
 
 type DerivedState = components["schemas"]["DerivedState"];
 type DeriveRequest = components["schemas"]["DeriveRequest"];
+type DerivedComp = components["schemas"]["DerivedComp"];
 
 /**
- * WS-1 walking skeleton (QUEUE.md row 6) — the one hardcoded search, fired
- * on mount. No selection/weight UI, no map, no form (out of scope): this
- * view exists to prove the real pull -> stitch -> anchor -> bucket ->
- * price-test chain end to end with a real browser round trip.
+ * WS-1 walking skeleton (QUEUE.md row 6) — the one hardcoded search. No map,
+ * no search form (out of scope). F5-S2 adds the curation half: per-row
+ * include/weight controls, ALL/NONE, and the contribution %.
  *
  * D5: this component computes NOTHING. Every number below is read straight
- * off `DerivedState` — no arithmetic, no aggregation, no formula. Formatting
- * (rounding for display, D14) is the only thing done here.
+ * off `DerivedState` — no arithmetic, no aggregation, no formula. The only
+ * two exceptions are both display rules, not statistics: rounding for
+ * display (D14), and comparing an already-computed contribution share
+ * against `CONTRIBUTION_WARNING_SHARE` to pick a colour.
+ *
+ * In particular the contribution % is `weight ÷ Σ selected weights`, which is
+ * trivial enough to be tempting — and is computed in Python like every other
+ * derived value (F5-S2 [INVARIANT], NORTH_STAR). This view renders
+ * `comp.contribution_share`; it never divides.
  */
-const HARDCODED_REQUEST: DeriveRequest = {
-  pull_ref: "ws1-real",
-  subject: {
-    address: "3651 S Wood St, Chicago, IL 60609",
-    lat: 41.83,
-    lng: -87.665,
-    sqft: 1200,
-    beds: 4,
-    baths: 2,
-  },
-  candidate_rent: 4500,
+const PULL_REF = "ws1-real";
+
+const SUBJECT: DeriveRequest["subject"] = {
+  address: "3651 S Wood St, Chicago, IL 60609",
+  lat: 41.83,
+  lng: -87.665,
+  sqft: 1200,
+  beds: 4,
+  baths: 2,
 };
 
-type FetchState =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; data: DerivedState };
+const CANDIDATE_RENT = 4500;
+
+/**
+ * [INVARIANT] toggle-off ≡ weight 0. There is no separate `included` flag in
+ * this component's state — the weight is the single source of truth, so the
+ * checkbox and the number input are two controls over one value and cannot
+ * drift apart.
+ */
+const INCLUDED_WEIGHT = 1;
+
+/**
+ * F5 epic edge: "one comp >~40% contribution → its contribution % renders in
+ * warning colour (no hard cap by design)". The threshold is a *display* rule
+ * — the server reports the real, uncapped share and this only decides which
+ * colour to draw it in.
+ */
+const CONTRIBUTION_WARNING_SHARE = 0.4;
 
 export default function Results() {
-  const [state, setState] = useState<FetchState>({ status: "loading" });
+  /**
+   * Curation state, client-owned (D13). Sparse on purpose: a comp the client
+   * has said nothing about is absent here and the server applies the
+   * defaulting rule (1.0, or 0.0 with no sqft), which is what lets comps that
+   * are new to a refreshed pull arrive included without the client having
+   * heard of them (F13-S1).
+   */
+  const [weights, setWeights] = useState<Record<string, number>>({});
 
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch("/api/derive", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(HARDCODED_REQUEST),
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          throw new Error(`POST /api/derive returned ${res.status}: ${await res.text()}`);
-        }
-        return (await res.json()) as DerivedState;
-      })
-      .then((data) => setState({ status: "ready", data }))
-      .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
-      });
-    return () => controller.abort();
-  }, []);
+  const { derived, status, error } = useDerive({
+    pull_ref: PULL_REF,
+    subject: SUBJECT,
+    weights,
+    candidate_rent: CANDIDATE_RENT,
+  });
 
-  if (state.status === "loading") {
+  /**
+   * "Currently visible" = everything a filter has not taken. ALL/NONE operate
+   * over exactly this set (F5-S2 AC), so a comp the user cannot see keeps the
+   * weight they last chose for it and reappears at that weight when the
+   * filter clears (F7-S1).
+   */
+  const visible = derived ? derived.comps.filter((comp) => comp.state !== "filtered") : [];
+
+  const setWeight = (key: string, weight: number) =>
+    setWeights((prev) => ({ ...prev, [key]: weight }));
+
+  const setWeightForAll = (weight: number, apply: (comp: DerivedComp) => boolean) =>
+    setWeights((prev) => {
+      const next = { ...prev };
+      for (const comp of visible) {
+        if (apply(comp)) next[comp.key] = weight;
+      }
+      return next;
+    });
+
+  /**
+   * ALL selects the visible comps *that have a $/sqft*. A missing-sqft comp
+   * stays opt-in per comp: the F5 epic says those are "excluded by default,
+   * **manual** re-include allowed", and a bulk sweep is not a manual act. It
+   * also keeps a comp that contributes nothing to the anchor from silently
+   * acquiring a contribution share. (PM ruling, F5-S2 dispatch.)
+   */
+  const selectAll = () => setWeightForAll(INCLUDED_WEIGHT, (comp) => comp.psf !== null);
+  const selectNone = () => setWeightForAll(0, () => true);
+
+  // Before the first payload there is nothing to render but the reason why.
+  if (!derived) {
     return (
-      <section className="p-6">
-        <h1 className="text-amber text-xl">Results</h1>
-        <p className="mt-2 text-sm text-grey">Deriving...</p>
-      </section>
+      <ResultsShell>
+        <p className={error ? "mt-2 text-sm text-rust" : "mt-2 text-sm text-grey"}>
+          {error ? `Derive failed: ${error}` : "Deriving..."}
+        </p>
+      </ResultsShell>
     );
   }
 
-  if (state.status === "error") {
-    return (
-      <section className="p-6">
-        <h1 className="text-amber text-xl">Results</h1>
-        <p className="mt-2 text-sm text-rust">Derive failed: {state.message}</p>
-      </section>
-    );
-  }
+  return (
+    <ResultsShell>
+      <p className="mt-1 text-xs text-grey">
+        {derived.meta.pull_ref} · as of {derived.meta.as_of} · {derived.breakdown.pulled} comps
+        pulled
+      </p>
 
-  const { data } = state;
+      <DeriveStatusLine status={status} error={error} />
+      <AnchorPanel anchor={derived.anchor} />
+      <CompList
+        comps={derived.comps}
+        weights={weights}
+        onWeightChange={setWeight}
+        onSelectAll={selectAll}
+        onSelectNone={selectNone}
+        includedCount={derived.breakdown.included}
+      />
+      <BucketTable buckets={derived.buckets} />
+      <PriceTestPanel priceTest={derived.price_test} />
+    </ResultsShell>
+  );
+}
 
+function ResultsShell({ children }: { children: ReactNode }) {
   return (
     <section className="p-6">
       <h1 className="text-amber text-xl">Results</h1>
-      <p className="mt-1 text-xs text-grey">
-        {data.meta.pull_ref} · as of {data.meta.as_of} · {data.breakdown.pulled} comps pulled
-      </p>
-
-      <AnchorPanel anchor={data.anchor} />
-      <CompList comps={data.comps} />
-      <BucketTable buckets={data.buckets} />
-      <PriceTestPanel priceTest={data.price_test} />
+      {children}
     </section>
   );
+}
+
+/**
+ * Whether the panels below are still the answer to the edit the user just
+ * made. F5's success criterion is "no hidden state": numbers left standing
+ * after a re-derive failed, or while one is in flight, are exactly that — the
+ * screen looks settled and is not.
+ */
+function DeriveStatusLine({
+  status,
+  error,
+}: {
+  status: DeriveStatus;
+  error: string | null;
+}) {
+  if (status === "error") {
+    return (
+      <p data-testid="derive-status" className="mt-2 text-xs text-rust">
+        Re-derive failed — the numbers below are from before your last edit: {error}
+      </p>
+    );
+  }
+  if (status === "deriving") {
+    return (
+      <p data-testid="derive-status" className="mt-2 text-xs text-grey">
+        Re-deriving...
+      </p>
+    );
+  }
+  return null;
 }
 
 function AnchorPanel({ anchor }: { anchor: DerivedState["anchor"] }) {
@@ -111,26 +190,132 @@ function AnchorPanel({ anchor }: { anchor: DerivedState["anchor"] }) {
   );
 }
 
-function CompList({ comps }: { comps: DerivedState["comps"] }) {
+interface CompListProps {
+  comps: DerivedComp[];
+  weights: Record<string, number>;
+  onWeightChange: (key: string, weight: number) => void;
+  onSelectAll: () => void;
+  onSelectNone: () => void;
+  includedCount: number;
+}
+
+function CompList({
+  comps,
+  weights,
+  onWeightChange,
+  onSelectAll,
+  onSelectNone,
+  includedCount,
+}: CompListProps) {
   return (
     <div className="mt-4">
-      <h2 className="text-white text-sm font-bold">Comps ({comps.length})</h2>
+      <div className="flex items-center gap-4">
+        <h2 className="text-white text-sm font-bold">
+          Comps ({includedCount} of {comps.length} included)
+        </h2>
+        <button
+          type="button"
+          data-testid="select-all"
+          onClick={onSelectAll}
+          className="text-xs text-green border border-green px-2 py-0.5"
+        >
+          ALL
+        </button>
+        <button
+          type="button"
+          data-testid="select-none"
+          onClick={onSelectNone}
+          className="text-xs text-grey border border-grey px-2 py-0.5"
+        >
+          NONE
+        </button>
+      </div>
       <ul>
         {comps.map((comp) => (
-          <li key={comp.key} data-testid="comp-row" className="text-sm text-grey py-0.5">
-            {comp.address}
-            {comp.unit ? ` #${comp.unit}` : ""} — ${comp.initial_ask.toFixed(0)}
-            {" · "}
-            premium {comp.premium === null ? "—" : `${(comp.premium * 100).toFixed(1)}%`}
-            {" · "}
-            cohort {comp.cohort_year}
-            {" · "}
-            {comp.censored ? `${comp.effective_dom}d and counting (censored)` : `${comp.effective_dom} days`}
-            {comp.removal_class ? ` · ${comp.removal_class}` : ""}
-          </li>
+          <CompRow
+            key={comp.key}
+            comp={comp}
+            // The weight the user chose, else the one the server derived for
+            // them. One value drives both controls below — see INCLUDED_WEIGHT.
+            weight={weights[comp.key] ?? comp.weight}
+            onWeightChange={onWeightChange}
+          />
         ))}
       </ul>
     </div>
+  );
+}
+
+interface CompRowProps {
+  comp: DerivedComp;
+  weight: number;
+  onWeightChange: (key: string, weight: number) => void;
+}
+
+function CompRow({ comp, weight, onWeightChange }: CompRowProps) {
+  const included = weight > 0;
+  const label = `${comp.address}${comp.unit ? ` #${comp.unit}` : ""}`;
+
+  return (
+    <li
+      data-testid="comp-row"
+      data-comp-key={comp.key}
+      className="text-sm text-grey py-0.5 flex items-baseline gap-2"
+    >
+      <input
+        type="checkbox"
+        data-testid="comp-include-toggle"
+        aria-label={`Include ${label}`}
+        checked={included}
+        onChange={() => onWeightChange(comp.key, included ? 0 : INCLUDED_WEIGHT)}
+      />
+      <input
+        type="number"
+        data-testid="comp-weight"
+        aria-label={`Weight for ${label}`}
+        min={0}
+        step={0.25}
+        value={String(weight)}
+        onChange={(event) => {
+          const raw = event.target.value;
+          // An emptied box reads as 0, which is exactly "not selected" — the
+          // same state the checkbox writes, because there is only one state.
+          const parsed = raw === "" ? 0 : Number(raw);
+          if (!Number.isFinite(parsed) || parsed < 0) return;
+          onWeightChange(comp.key, parsed);
+        }}
+        className="w-16 bg-surface border border-grey text-white px-1"
+      />
+      <ContributionCell share={comp.contribution_share} />
+      <span>
+        {label} — ${comp.initial_ask.toFixed(0)}
+        {" · "}
+        premium {comp.premium === null ? "—" : `${(comp.premium * 100).toFixed(1)}%`}
+        {" · "}
+        cohort {comp.cohort_year}
+        {" · "}
+        {comp.censored ? `${comp.effective_dom}d and counting (censored)` : `${comp.effective_dom} days`}
+        {comp.removal_class ? ` · ${comp.removal_class}` : ""}
+      </span>
+    </li>
+  );
+}
+
+/**
+ * The server's `contribution_share`, rendered. Never recomputed here: making
+ * this a local `weight / total` would be a D5/D13 violation and would give a
+ * second implementation of a formula that already exists in Python.
+ */
+function ContributionCell({ share }: { share: number | null }) {
+  const dominant = share !== null && share > CONTRIBUTION_WARNING_SHARE;
+  return (
+    <span
+      data-testid="comp-contribution"
+      title={dominant ? "This comp dominates the analysis" : undefined}
+      className={dominant ? "text-amber font-bold w-16" : "text-grey w-16"}
+    >
+      {share === null ? "—" : `${(share * 100).toFixed(1)}%`}
+    </span>
   );
 }
 

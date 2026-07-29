@@ -12,13 +12,19 @@
  * representative above), each appears exactly once here and NO restored value
  * is asserted from the browser; that is L2's job.
  *
- * THE FOUR ROWS BELOW BELONG TO F1-S1, NOT F1-S2 — read this before judging a run
- * ------------------------------------------------------------------------------
- * `frontend/src/views/Home.tsx` is still the F0-S1b scaffold: no NEW SEARCH
- * button, no recents table, no router link to Results. F1-S1 ("[FE] Home view.
- * NEW SEARCH primary button + recents table (address, specs, radius, anchor,
- * age), newest-first") is a separate story, BLOCKED on this one in QUEUE.md.
- * F1-S2's developer cannot make these green and must not be asked to.
+ * THREE OF THE ROWS BELOW BELONG TO F1-S1, NOT F1-S2 — read this before judging a run
+ * -----------------------------------------------------------------------------------
+ * `frontend/src/views/Home.tsx` has no recents table and no router link to
+ * Results. F1-S1 ("[FE] Home view. NEW SEARCH primary button + recents table
+ * (address, specs, radius, anchor, age), newest-first") is a separate story,
+ * BLOCKED on this one in QUEUE.md. F1-S2's developer cannot make those green
+ * and must not be asked to.
+ *
+ * UPDATED 2026-07-29 (F1-S2 dev): this paragraph originally said Home was still
+ * the F0-S1b scaffold with "no NEW SEARCH button". That was true of the base
+ * this file was written against and is no longer true of main — **F2-S1 shipped
+ * the NEW SEARCH button**. The empty-state row's `test.fail()` has therefore
+ * been removed and that row now passes for real; the other three markers stay.
  *
  * So they are written test-first and marked `test.fail()` — Playwright's strict
  * xfail: the run fails if one of them PASSES, which forces the marker off the
@@ -277,7 +283,14 @@ test.describe("F1 · Home", () => {
 
   test("with no recents the table is hidden and NEW SEARCH is the only path", async ({ page }) => {
     skipIfSetupFailed();
-    test.fail(); // F1-S1 owns the Home view; see the file header.
+    // `test.fail()` REMOVED by F1-S2's developer (disclosed to QA via the PM).
+    // The marker was written against main at 86a9286, where Home was still the
+    // F0-S1b scaffold; **F2-S1 shipped the NEW SEARCH button** (`Home.tsx:49`)
+    // before F1-S2 was dispatched, so both halves of this row are now genuinely
+    // satisfied — no recents table (still F1-S1's) and a visible NEW SEARCH.
+    // The strict marker did exactly its job: it went red the day the gap closed
+    // and demanded its own removal rather than decaying into a comment. The
+    // other three markers in this file stay — the recents TABLE is F1-S1's.
     // Nothing saved in this test's run order-independent state: assert on a
     // Home whose store is empty by asking the API first.
     const listed = await (await fetch(`${BASE_URL}/api/workspaces`)).json();

@@ -87,64 +87,82 @@ def _comps(segments, as_of: date = AS_OF):
 # ---------------------------------------------------------------------------
 
 
+#: The chain that separates the two readings. Its last spell *by listed date*
+#: (B) ends 150 days before the chain actually did (A), so a re-list placed
+#: just inside the 42d-to-6mo window from the true end lands well *outside*
+#: it when measured from the truncated one:
+#:
+#:     A  2025-01-01 -> 2025-08-01   the latest removal the chain observed
+#:     B  2025-02-01 -> 2025-03-04   last by listed date, first to end
+#:     ---- chain ends 2025-08-01, not 2025-03-04 ----
+#:     C  2025-09-20                 50 days after the real end  -> SUSPECT
+#:                                  200 days after the truncated one -> not
+_TRUE_END = date(2025, 8, 1)
+_TRUNCATED_END = date(2025, 3, 4)
+_OVERLAPPING_CHAIN = [
+    (date(2025, 1, 1), _TRUE_END),
+    (date(2025, 2, 1), _TRUNCATED_END),
+]
+
+
 def test_the_withdrawal_suspect_window_is_measured_from_the_chains_latest_removal() -> None:
-    """PM ruling E4: `_withdrawal_suspect_flags` shared BUG-2's expression.
+    """PM ruling E4: `_withdrawal_suspect_flags` shared BUG-2's expression,
+    so it measured the 6-week-to-6-month re-list window from a *truncated*
+    chain end.
 
-    The chain here overlaps, so its last spell *by listed date* ends well
-    before the chain actually did:
+    Built so the two readings give opposite answers — the earlier version of
+    this test used a re-list that was inside the window under both readings,
+    which meant it passed with the defect reintroduced (caught by mutating
+    `_chain_end` back to `chains[i][-1].removed` and watching nothing fail).
 
-        A  2025-01-01 -> 2025-06-01   (the latest removal the chain observed)
-        B  2025-02-01 -> 2025-03-01   (last by listed date, first to end)
-        ---- chain ends 2025-06-01 ----
-        C  2025-07-20                 (49 days after the real end)
-
-    49 days is inside the 42d-to-6mo suspicion window, so C's re-list casts
-    doubt on whether A/B's "lease" happened. Measured from B's 2025-03-01
-    instead, the gap reads 141 days — still inside the window here, so the
-    flag alone cannot distinguish the two rules; what distinguishes them is
-    that the *chain boundary* moves with it. The assertion that bites is the
-    lower one: from the truncated end, C would have merged rather than being
-    a separate chain at all.
+    A withdrawal-suspect flag says: this unit came back 6 weeks to 6 months
+    after we recorded it as leased, so doubt the lease. Measuring the "after"
+    from the wrong date does not just move a number — it silently drops the
+    doubt on a real re-list, and NORTH_STAR makes this a display-only flag
+    precisely so the human can weigh it. A flag that never appears cannot be
+    weighed.
     """
-    segments = [
-        (date(2025, 1, 1), date(2025, 6, 1)),
-        (date(2025, 2, 1), date(2025, 3, 1)),
-        (date(2025, 7, 20), date(2025, 8, 20)),
-    ]
+    relist = _TRUE_END + timedelta(days=50)
+    assert (relist - _TRUNCATED_END).days == 200, "oracle drift: the two readings must disagree"
+
+    segments = [*_OVERLAPPING_CHAIN, (relist, relist + timedelta(days=30))]
     chains = stitch(_spells(segments), DEFAULT_THRESHOLD)
     assert [len(c) for c in chains] == [2, 1], (
-        "the 2025-07-20 re-list is 49 days after the chain's latest observed removal "
-        "(2025-06-01), which is >= the 42d threshold, so it must start a new chain. "
-        f"Measured from the last spell by listed date it is 141 days. Got {[len(c) for c in chains]}"
+        f"expected the overlapping pair to merge and the re-list to split off, got "
+        f"{[len(c) for c in chains]}"
     )
 
     comps = _comps(segments)
     assert len(comps) == 2
     first = min(comps, key=lambda c: c.first_listed)
     assert first.withdrawal_suspect is True, (
-        "the first chain ended 2025-06-01 and the unit re-listed 49 days later — inside the "
-        "6-week-to-6-month withdrawal-suspect window"
+        f"the chain ended {_TRUE_END} and the unit re-listed {relist} — 50 days later, inside "
+        f"the 42d-to-6mo withdrawal-suspect window. Measured from {_TRUNCATED_END} (the last "
+        "spell by listed date) the gap reads 200 days and the flag is lost."
     )
 
 
 def test_a_relist_beyond_six_months_of_the_chains_real_end_is_not_suspect() -> None:
-    """The complement, and the direction the old expression got wrong.
-
-    Same overlapping chain ending 2025-06-01, re-listed 2026-01-15 — 228
-    days later, past the 6-month ceiling, so not suspicious. From the
-    truncated end (2025-03-01) that gap reads 320 days; both are outside the
-    window, but only one of them is the number the flag claims to be about.
-    """
-    comps = _comps(
-        [
-            (date(2025, 1, 1), date(2025, 6, 1)),
-            (date(2025, 2, 1), date(2025, 3, 1)),
-            (date(2026, 1, 15), date(2026, 2, 15)),
-        ]
-    )
+    """The ceiling, from the chain's real end: 200 days is past 6 months, so
+    a re-list that far out is an ordinary new vacancy, not a doubted lease."""
+    relist = _TRUE_END + timedelta(days=200)
+    comps = _comps([*_OVERLAPPING_CHAIN, (relist, relist + timedelta(days=30))])
     assert len(comps) == 2
     first = min(comps, key=lambda c: c.first_listed)
     assert first.withdrawal_suspect is False
+
+
+def test_the_withdrawal_suspect_floor_is_the_chains_real_end_too() -> None:
+    """The other edge of the same window. A re-list 45 days after the chain's
+    true end is suspect; the truncated reading puts it 195 days out and drops
+    the flag. Stated separately from the 50-day case above so a fix that
+    satisfies one edge by shifting the window cannot satisfy both."""
+    relist = _TRUE_END + timedelta(days=45)
+    assert (relist - _TRUNCATED_END).days == 195
+    comps = _comps([*_OVERLAPPING_CHAIN, (relist, relist + timedelta(days=30))])
+    assert len(comps) == 2
+    first = min(comps, key=lambda c: c.first_listed)
+    assert first.withdrawal_suspect is True
 
 
 def test_a_censored_chain_is_never_withdrawal_suspect() -> None:

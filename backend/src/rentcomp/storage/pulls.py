@@ -58,8 +58,10 @@ from rentcomp.pipeline.shape import shape_raw_pull
 from rentcomp.storage.cache import (
     CORRUPT_MANIFEST_ERRORS,
     CacheMissError,
+    manifest_fingerprint,
     raw_response_paths,
     read_manifest,
+    records_from_raw,
 )
 from rentcomp.storage.config import Config
 
@@ -231,15 +233,28 @@ def pull_exists(pull_ref: str) -> bool:
 
 
 def _evidence_version(pull_ref: str) -> str:
-    """A cheap fingerprint of the raw responses currently filed under a
-    cache-backed ref — the memo's staleness guard (see `load_shaped_pull`).
+    """A cheap fingerprint of everything a shaped pull is built from — the
+    memo's staleness guard (see `load_shaped_pull`).
 
-    `(name, size, mtime_ns)` per raw file rather than a digest of their
-    contents. `cache/` is append-only immutable evidence by construction
-    (ARCHITECTURE.md §5): the only way the shaped result can change is a file
-    appearing, and that is visible in the name set alone. Size and mtime are
-    belt-and-braces for an in-place rewrite, and cost two `stat` calls per
-    file against the whole-file read a hash would need.
+    Two halves, because `_load_cache_backed_pull` reads two things:
+
+    * **the raw responses**, as `(name, size, mtime_ns)` per file rather than a
+      digest of their contents. `cache/` is append-only immutable evidence by
+      construction (ARCHITECTURE.md §5): the only way the shaped result can
+      change is a file appearing, and that is visible in the name set alone.
+      Size and mtime are belt-and-braces for an in-place rewrite, and cost two
+      `stat` calls per file against the whole-file read a hash would need.
+    * **the manifest** (F3-S4). `as_of` and `window` come from it and are handed
+      straight to `shape_raw_pull`, so a manifest that changes while the bytes
+      do not changes every censored comp's `effective_dom` — and used to be
+      invisible here, leaving the process serving numbers derived from a date
+      that is no longer on disk. Fixing `run_pull`'s restamp removes the way
+      the *product* reaches that state; it does not remove the state (a
+      restored backup, a hand-edit, a later story rewriting a manifest), and
+      the failure is silent by construction. Digested by content rather than
+      by mtime: `as_of` moving from one ISO date to another leaves the file
+      exactly the same size, so size+mtime would rest entirely on the clock's
+      resolution.
 
     Empty string for everything that is not a cache-backed ref (synthetic
     pulls, `ws1-real`): those are read-only fixtures nothing appends to, and
@@ -248,7 +263,7 @@ def _evidence_version(pull_ref: str) -> str:
     try:
         if not _looks_like_cache_key(_safe_ref(pull_ref)):
             return ""
-        parts = []
+        parts = [f"manifest:{manifest_fingerprint(pull_ref)}"]
         for path in raw_response_paths(pull_ref):
             stat = path.stat()
             parts.append(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}")
@@ -361,9 +376,21 @@ def _load_cache_backed_pull(key: str, config: Config) -> ShapedPull:
     inactive: list[dict] = []
     raw_blobs: list[bytes] = []
     for path in paths:
-        blob = path.read_bytes()
+        try:
+            blob = path.read_bytes()
+        except OSError:
+            # A directory standing where a response belongs — crash debris, not
+            # evidence, and not a reason to fail the whole derive.
+            continue
+        records = records_from_raw(blob)
+        if records is None:
+            # Present is not the same as usable: a response truncated by a
+            # crash, emptied, or in a shape this parser does not recognise is
+            # not evidence, and shaping must not choke on it or invent records
+            # out of it. `pull_status` reports the same file as an open window,
+            # so the two answers agree about what this pull holds (F3-S4).
+            continue
         raw_blobs.append(blob)
-        records = json.loads(blob) if blob else []
         # "inactive" contains "active" as a substring, so it must be checked
         # first — a sig like "y2025-inactive-off000" must not be misfiled.
         bucket = inactive if "inactive" in path.stem else active

@@ -70,8 +70,13 @@ __all__ = [
     "Manifest",
     "QueryStatus",
     "cache_key",
+    "manifest_fingerprint",
     "raw_response_paths",
     "read_manifest",
+    "read_raw_meta",
+    "read_raw_records",
+    "records_from_raw",
+    "records_in",
     "write_manifest",
     "write_raw_response",
 ]
@@ -116,6 +121,25 @@ class QueryStatus:
     sig: str
     satisfied: bool
     error: str | None = None
+    #: Would another RentCast call deliver something this window does not
+    #: already hold? `None` means "not recorded", and falls back to the rule
+    #: F4-S9 shipped: a window is owed exactly when it is not satisfied. Every
+    #: manifest written before F3-S4 reads back that way, so widening this
+    #: field cannot change what an existing entry costs to finish.
+    #:
+    #: The state that needs the third answer is a **2xx we cannot parse**: the
+    #: call was made, the money is gone, the bytes are filed, and re-buying it
+    #: returns the same bytes (D24). That window is neither satisfied (its
+    #: evidence is unusable, so `missing` must still name it) nor owed (a call
+    #: would buy nothing) — and `calls_to_complete` is what F3-S2's modal asks
+    #: the user to consent to, so it may only ever count calls a resume would
+    #: actually make.
+    owed: bool | None = None
+
+    @property
+    def is_owed(self) -> bool:
+        """Whether completing this pull should send a call for this window."""
+        return (not self.satisfied) if self.owed is None else self.owed
 
     def as_json(self) -> dict:
         return {
@@ -123,6 +147,7 @@ class QueryStatus:
             "sig": self.sig,
             "satisfied": self.satisfied,
             "error": self.error,
+            "owed": self.is_owed,
         }
 
 
@@ -158,9 +183,15 @@ class Manifest:
 
     @property
     def calls_to_complete(self) -> int:
-        """One call per missing window — the F2-S3 unit, so the number shown
-        and the number spent cannot drift."""
-        return len(self.missing)
+        """One call per window a resume would actually send — the F2-S3 unit,
+        so the number shown and the number spent cannot drift.
+
+        Not `len(self.missing)`: a window holding a 2xx this parser cannot use
+        is missing (its evidence is unusable) and is *not* owed (the bytes are
+        already paid for and a second call returns the same ones). Quoting a
+        call there would take money the resume then refuses to spend.
+        """
+        return sum(1 for q in self.queries if q.is_owed)
 
     @property
     def complete(self) -> bool:
@@ -224,10 +255,29 @@ def _atomic_write_bytes(path: Path, body: bytes) -> None:
             handle.write(body)
             handle.flush()
             os.fsync(handle.fileno())
+        _clear_directory_obstruction(path)
         os.replace(tmp, path)
     except OSError:
         tmp.unlink(missing_ok=True)
         raise
+
+
+def _clear_directory_obstruction(path: Path) -> None:
+    """Remove an EMPTY directory standing where a response file belongs.
+
+    Nothing this module writes is ever a directory, so one at a response path
+    is debris — a half-finished sync, a restored backup, a file manager. Left
+    in place it makes `os.replace` raise (`PermissionError` on Windows,
+    `IsADirectoryError` on POSIX) and the paid-for bytes are lost, which is
+    the one outcome D24 exists to prevent.
+
+    Deliberately `rmdir`, not `rmtree`: an empty directory cannot be anyone's
+    data, and a non-empty one is something this code has no business deleting
+    — it raises here and the caller's `except OSError` handles it as a failed
+    write.
+    """
+    if path.is_dir():
+        os.rmdir(path)
 
 
 def write_raw_response(key: str, sig: str, raw: bytes, *, meta: Mapping) -> Path | None:
@@ -306,12 +356,104 @@ def read_manifest(key: str) -> Manifest:
 
 
 def _query_status(payload: Mapping) -> QueryStatus:
+    owed = payload.get("owed")
     return QueryStatus(
         label=str(payload.get("label") or ""),
         sig=str(payload.get("sig") or ""),
         satisfied=bool(payload.get("satisfied")),
         error=payload.get("error") if isinstance(payload.get("error"), str) else None,
+        # Absent in every manifest written before F3-S4 — `None` there means
+        # "fall back to `not satisfied`", which is exactly what those entries
+        # meant when they were written.
+        owed=bool(owed) if isinstance(owed, bool) else None,
     )
+
+
+def manifest_fingerprint(key: str) -> str:
+    """A digest of the manifest bytes at `key`, or `""` when there is none.
+
+    The memo in `storage/pulls.py` keys on the evidence a shaped pull was
+    built from, and `as_of`/`window` — both read from this file — are inputs
+    to `shape_raw_pull` every bit as much as the raw responses are. Content
+    rather than `(size, mtime_ns)`, unlike the raw files: a manifest rewrite
+    that only changes `as_of` from one ISO date to another leaves the size
+    identical, so size+mtime would rest entirely on the clock's resolution.
+    One small file read per derive, against re-shaping the whole pull.
+    """
+    try:
+        body = (_entry_dir(key) / "manifest.json").read_bytes()
+    except (OSError, ValueError):
+        return ""
+    return sha256(body).hexdigest()[:16]
+
+
+def records_in(payload: object) -> list[dict] | None:
+    """The listing records inside an already-parsed response body, or `None`.
+
+    **THE project's single definition of "what a RentCast listings response
+    is"**: a bare JSON array, or `{"listings": [...]}`. `client.rentcast`
+    imports this rather than keeping its own copy, so the live path and the
+    disk path cannot disagree about whether a given body is evidence.
+
+    They used to, and the divergence was unbounded spend. `_extract_records`
+    read an unrecognised envelope — `{"data": [...]}`, the canonical shape of
+    a RentCast schema change — as `[]`, a valid empty answer, so the window was
+    filed `satisfied`. This function read the same bytes as unusable, so every
+    later run re-opened the window and bought it again. Neither side was
+    obviously wrong on its own; the *difference* is what made the loop
+    unbounded, so it is removed by construction rather than by comment.
+
+    `None` means "not usable evidence". That is a different fact from "the
+    response was an empty market" (`[]` → `[]`), and the two must never
+    collapse into each other: one is a gap, the other is a real, paid-for
+    answer (the same distinction `FixtureMissingError` exists for).
+    """
+    if isinstance(payload, dict):
+        payload = payload.get("listings")
+    if not isinstance(payload, list):
+        return None
+    return [record for record in payload if isinstance(record, dict)]
+
+
+def records_from_raw(blob: bytes) -> list[dict] | None:
+    """`records_in` over raw response bytes, or `None` if they are not JSON.
+
+    `None` also covers a body truncated or emptied by a crash — the caller's
+    question is always "is this evidence", and half a response is not.
+    """
+    try:
+        payload = json.loads(blob)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return records_in(payload)
+
+
+def read_raw_records(path: Path) -> list[dict] | None:
+    """`records_from_raw` over a stored response, or `None` if it cannot be read.
+
+    Also `None` for a file that is missing or is a directory — a crash can
+    leave either standing where a response belongs, and neither is evidence.
+    """
+    try:
+        blob = path.read_bytes()
+    except OSError:
+        return None
+    return records_from_raw(blob)
+
+
+def read_raw_meta(raw_path: Path) -> dict:
+    """The `meta` sidecar filed beside a raw response — `{}` if unreadable.
+
+    The sidecar is the only durable record of *when* a given response
+    arrived, which is what lets a pull whose manifest was lost rebuild
+    `as_of` from the evidence instead of stamping the day of the repair on
+    comps nobody re-observed.
+    """
+    try:
+        payload = json.loads(raw_path.with_name(f"{raw_path.stem}.meta.json").read_bytes())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def raw_response_paths(key: str) -> list[Path]:

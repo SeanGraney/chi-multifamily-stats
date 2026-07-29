@@ -22,12 +22,13 @@ per raw file — precisely because that premise is false for a partial-pull
 resume. The first test below is the regression pin for that, on the workspace
 path.
 
-The second test is a FINDING, reported to the PM and marked strict-xfail rather
-than fixed: `_evidence_version` covers `cache/<key>/raw/`, but the shaped result
-also depends on the MANIFEST (`as_of` and the window are read from it), and the
-manifest is not in the key. `run_pull` restamps `as_of` to the day of the
-attempt whenever any query is owed — including when every one of them then
-FAILS and no byte is written. See the test for the measured consequence.
+The second test was a FINDING when this file was written — reported to the PM
+and marked `xfail(strict=True)` rather than fixed, because the fix was F3-S4's
+to make and the marker had to fail (not decay into a note) the day it landed.
+**F3-S4 closed it from both ends and the marker is gone:** `run_pull` now
+advances `as_of` only when a response actually reaches the store, and
+`_evidence_version` now covers the manifest as well as `cache/<key>/raw/`. This
+is the regression pin for both halves on the F1 flow.
 """
 
 from __future__ import annotations
@@ -35,7 +36,6 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
-import pytest
 from f1s2_support import (
     DERIVE_PATH,
     PLAN_ARGS,
@@ -95,19 +95,6 @@ def test_reopening_a_workspace_sees_evidence_that_arrived_after_the_memo_was_war
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "QA FINDING (F1-S2, reported to the PM, not fixed here). `run_pull` restamps the "
-        "manifest's `as_of` to the day of the attempt whenever a query is owed — including "
-        "when every one of them FAILS and no byte is written — while `storage/pulls.py`'s memo "
-        "key (`_evidence_version`) covers only the raw files. Same disk, two answers: measured "
-        "on 2026-07-28, effective_dom 150-155 before a restart and 180-185 after, for evidence "
-        "that never changed. Strict, so it FAILS the day the gap is closed and demands its own "
-        "removal rather than decaying into a note. PM to rule whether the fix is the restamp "
-        "(as_of should only advance when bytes actually arrive) or the memo key."
-    ),
-)
 def test_a_reopened_workspace_derives_the_same_numbers_before_and_after_a_restart(
     api, pull, fixture_mode, clear_caches
 ) -> None:

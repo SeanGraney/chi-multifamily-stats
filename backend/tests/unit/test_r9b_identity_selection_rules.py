@@ -517,3 +517,76 @@ def test_a_published_area_is_always_a_usable_measurement(records: list[dict]) ->
     assert (comp.psf is None) == (comp.sqft is None), (
         "a comp has a $/sqft exactly when it has a usable area"
     )
+
+
+# ===========================================================================
+# 7. THE BLAST RADIUS ON REAL DATA — the bound above, measured
+# ===========================================================================
+
+
+def test_exactly_one_identity_value_in_the_real_pull_differs_from_chain_minus_one() -> None:
+    """The measured consequence of the rule, stated as a diff against the
+    behaviour it replaces — which is a stronger and more durable claim than the
+    "484 -> 485" count QA pins, because it names every field on every comp
+    rather than one aggregate.
+
+    For all 567 comps and all seven identity fields, the value this selector
+    publishes is compared against what `chain[-1]` would have published.
+    Measured on the committed pull: **one difference, on one comp, in one
+    field** — `2350 s leavitt st|1r`'s `sqft`, `None -> 700.0`.
+
+    That is the property `test_the_last_spells_value_survives_whenever_it_
+    reported_one` predicts, confirmed against real evidence: the change can only
+    reach a field about which the chain's last spell said nothing, and on this
+    pull only five multi-spell chains have such a field at all (four of which
+    have no other observation to fall back to either).
+
+    ⚠ Note what this also shows: row 9b's text anticipated a second, cosmetic
+    effect — `2453 W 46th Pl`'s displayed `unit` flipping `Unit 1` -> `# 1`.
+    Under this tie-break it does **not** flip, because that chain's last spell
+    does report a unit designator, so there is nothing to fall back for. The
+    pull's displayed strings are byte-identical before and after.
+    """
+    import json
+    from pathlib import Path
+
+    from rentcomp.pipeline.shape import _dedupe_by_id, _group_key, _in_window
+
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures" / "live-samples"
+    active = json.loads((fixtures / "fe9de5158f036802.json").read_text())
+    inactive = json.loads((fixtures / "6327600317b11d16.json").read_text())
+
+    groups: dict[str, list[dict]] = {}
+    for copies in _dedupe_by_id(active, inactive):
+        groups.setdefault(_group_key(copies), []).extend(copies)
+
+    # `shape_raw_pull`'s own loop — sorted group key, then chain order, with the
+    # same window filter — so the chains recovered here line up POSITIONALLY
+    # with the comps it returns. Matching on `comp_key` instead would beg the
+    # question: a change to the selected `unit` moves that key.
+    chains = [
+        chain
+        for key in sorted(groups)
+        if (spells := extract_spells(groups[key]))
+        for chain in stitch(spells, Config().stitch_gap_days)
+        if _in_window(chain[0].listed, *FULL_YEAR)
+    ]
+    comps = shape_raw_pull(active, inactive, Config(), AS_OF, *FULL_YEAR)
+    assert len(chains) == len(comps) == 567, (
+        f"harness precondition: 567 chains and 567 comps in positional correspondence; got "
+        f"{len(chains)} chains and {len(comps)} comps"
+    )
+
+    differences = []
+    for comp, chain in zip(comps, chains, strict=True):
+        assert comp.first_listed == chain[0].listed, "harness precondition: chains misaligned"
+        for field in IDENTITY_FIELDS:
+            was, now = getattr(chain[-1], field), getattr(comp, field)
+            if was != now:
+                differences.append((comp.address, comp.unit, field, was, now))
+
+    assert differences == [("2350 S Leavitt St", "Unit 1R", "sqft", None, 700.0)], (
+        f"the change reached {len(differences)} identity value(s) on the committed pull, expected "
+        f"exactly one: {differences[:10]}. A wider diff means the selector is doing more than "
+        f"falling back for fields the chain's last spell did not report."
+    )

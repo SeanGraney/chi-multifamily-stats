@@ -41,6 +41,8 @@ assertion in a browser costume (AGENT_QA.md, "smells").
     A3  it re-enters at the offset the held pages account
         for — neither re-buying nor skipping records         L1     test_a_page_resume_re_enters_at_the_offset_its_held_pages_account_for
     A4  re-running a COMPLETE paginated pull spends nothing  L1     test_rerunning_a_complete_paginated_pull_does_not_reach_for_the_wire
+    A6  and the state a page resume LEFT behind is just as
+        settled — no page bought once per attempt forever    L1     test_a_pull_completed_by_a_page_resume_then_spends_nothing_ever_again
     A5  a lost manifest over a paginated entry rebuilds
         from its pages, free (index and loader move
         together — QUEUE.md row 13e's binding lesson)        L1     test_a_lost_manifest_over_a_paginated_entry_is_rebuilt_from_its_pages_for_free
@@ -57,10 +59,14 @@ assertion in a browser costume (AGENT_QA.md, "smells").
     D1  the two routes cannot disagree about a paginated
         entry                                                L2     backend/tests/api/test_r13c_paginated_pull_on_the_wire.py
 
-RED / GREEN AT DISPATCH — measured, not predicted (17 red / 19 green)
+RED / GREEN AT DISPATCH — measured, not predicted (21 red / 19 green)
 ----------------------------------------------------------------------
-RED: A1, A2, A3, B1 (**all seven** damage shapes), B3, B4, C1.
+RED: A1, A2, A3, A6, B1 (**all seven** damage shapes), B3, B4, C1, D1.
 GREEN and must STAY green: P1, P2, A4, A5, B2, B5.
+
+A6 is red only because it depends on A3: it fails the interrupted pull's resume
+before it can judge what that resume left behind, and says so in its own message
+rather than asserting anything of its own.
 
 B1 failing on the `unreadable` shapes as well as the `gone` ones was not what
 this file predicted before it was run, and the reason matters: a truncated or
@@ -311,6 +317,39 @@ def test_rerunning_a_complete_paginated_pull_does_not_reach_for_the_wire(
         path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in page_files(outcome.pull_ref)
     }
     assert after == before, "a re-run of a complete paginated pull rewrote its pages"
+    assert no_sockets == []
+
+
+def test_a_pull_completed_by_a_page_resume_then_spends_nothing_ever_again(
+    interrupted, home, no_sockets
+) -> None:
+    """The state a page resume LEAVES BEHIND must be as settled as one that was
+    never interrupted.
+
+    A distinct disk state from A4's, and the one where an oscillation would live:
+    these pages were filed by two different runs, so a page index that is
+    recomputed per run — rather than agreed with what is on disk — can call the
+    window whole on the run that finished it and short on the next one, buying a
+    page per attempt for as long as the user keeps opening the workspace. That is
+    the failure mode with no stopping condition, which is the one D24 treats as
+    different in kind rather than in degree.
+    """
+    ref, _held = interrupted
+    resumed = run_pull(**SEARCH, today=TODAY, transport=Market().transport)
+    if not resumed.complete:
+        pytest.fail(
+            f"the resume did not finish the pull ({resumed.missing}); "
+            "test_a_page_resume_re_enters_at_the_offset_its_held_pages_account_for owns that "
+            "claim and this test cannot be judged until it passes"
+        )
+    load_shaped_pull.cache_clear()
+
+    denied = Denied("the pull was completed by a page resume and is whole")
+    third = run_pull(**SEARCH, today=TODAY, transport=denied.transport)
+
+    assert denied.requests == []
+    assert third.complete is True
+    assert len(load_shaped_pull(ref, Config()).comps) == expected_comps()
     assert no_sockets == []
 
 

@@ -59,14 +59,17 @@ assertion in a browser costume (AGENT_QA.md, "smells").
     D1  the two routes cannot disagree about a paginated
         entry                                                L2     backend/tests/api/test_r13c_paginated_pull_on_the_wire.py
 
-RED / GREEN AT DISPATCH — measured, not predicted (21 red / 19 green)
+RED / GREEN AT DISPATCH — measured, not predicted (21 red / 20 green)
 ----------------------------------------------------------------------
-RED: A1, A2, A3, A6, B1 (**all seven** damage shapes), B3, B4, C1, D1.
-GREEN and must STAY green: P1, P2, A4, A5, B2, B5.
+RED: A1, A2, A3, B1 (**all seven** damage shapes), B3, B4, C1, D1.
+GREEN and must STAY green: P1, P2, A4, A5, A6, B2, B5.
 
-A6 is red only because it depends on A3: it fails the interrupted pull's resume
-before it can judge what that resume left behind, and says so in its own message
-rather than asserting anything of its own.
+A6 is green today for a reason worth knowing: the resume DOES finish an
+interrupted spanning window — by re-buying page 0 and paginating forward from
+there — so the window really does settle, at the cost of one call the owner had
+already paid for. That is A1/A3's complaint, not A6's; A6's job is to make sure
+the fix does not trade the double-pay for something worse, a window that settles
+on the run that finishes it and comes loose on the next.
 
 B1 failing on the `unreadable` shapes as well as the `gone` ones was not what
 this file predicted before it was run, and the reason matters: a truncated or

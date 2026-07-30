@@ -28,11 +28,36 @@ browser costume. Zero network (D17): every ref below is served from disk.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+#: `fixtures/synthetic/pulls/` — located from this file, exactly as the Layer-1
+#: guard does. See `_pre_shaped_refs`.
+PULLS_DIR = Path(__file__).resolve().parents[3] / "fixtures" / "synthetic" / "pulls"
+
+
+def _pre_shaped_refs() -> tuple[str, ...]:
+    """Every committed pre-shaped pull, **by directory listing, not by name.**
+
+    This file used to enumerate three refs by hand. That is the same shape as
+    the defect this row exists to prevent: `f4s5-cohorts.json` arrived with
+    F4-S5, was pre-shaped, was impossible in all 15 of its comps, and was named
+    nowhere — the row's own fix instruction said "add `first_listed` to the
+    three fixtures" and would have left it broken. It was caught only because
+    the Layer-1 guard globs. A hand-kept list one layer up is the same trap
+    waiting for the fifth pull, and it is worse here than at Layer 1, because a
+    reader who opens this file sees three names and reasonably concludes three
+    is the complete set.
+    """
+    return tuple(sorted(path.stem for path in PULLS_DIR.glob("*.json")))
+
+
 #: The pre-shaped fixtures, plus the real-shaping control. `ws1-real` is not
-#: decoration — see the module docstring.
-PRE_SHAPED_REFS = ("synthetic-basic", "synthetic-100", "ws1-anchor-drift")
+#: decoration — see the module docstring. It is spelled out because it is the
+#: one ref that is *not* a pre-shaped file: it goes through `shape_raw_pull`,
+#: which is exactly why it is the control.
+PRE_SHAPED_REFS = _pre_shaped_refs()
 ALL_REFS = (*PRE_SHAPED_REFS, "ws1-real")
 
 #: F4-S8's ladder: `< 7` pending, `< 42` provisional, else confirmed.
@@ -110,23 +135,69 @@ def test_a_row_with_no_rung_never_reports_a_count(ref, comps_for) -> None:
     )
 
 
-@pytest.mark.parametrize("ref", ALL_REFS)
-def test_the_two_directions_are_not_both_vacuous(ref, comps_for) -> None:
-    """Every pull must contain at least one comp on each side of the iff.
+def test_this_file_and_the_server_are_looking_at_the_same_fixtures() -> None:
+    """A failing precondition, not a skip (`WORKFLOW.md` §2).
 
-    Without this, both tests above pass on a pull where `removal_class` is
-    `None` everywhere — which is very close to the state the fixtures were
-    actually in, and is exactly how a suite goes green over a corpus that
-    proves nothing. Stated per-ref deliberately: an average over the corpus
-    would let one healthy pull cover for three empty ones.
+    Two different resolutions are in play and they must agree: this file globs
+    `PULLS_DIR` **from its own path**, while the endpoint under test resolves
+    pulls through `storage.pulls.fixture_pulls_dir()`, which is derived from
+    the *loaded package's* location. In a worktree run whose `PYTHONPATH` names
+    another checkout (`WORKFLOW.md` §2 — and on Windows a `:` separator is
+    enough to cause it), those two are different directories, and this file
+    would parametrize over one corpus while deriving over another. That failure
+    is silent by construction, so it gets a loud test rather than a comment.
     """
-    comps = comps_for(ref)
-    removed = [c for c in comps if c["removal_class"] is not None]
-    active = [c for c in comps if c["removal_class"] is None]
+    from rentcomp.storage.pulls import fixture_pulls_dir
+
+    assert fixture_pulls_dir().resolve() == PULLS_DIR.resolve(), (
+        "this test file and the server disagree about where the pre-shaped pulls are.\n"
+        f"  this file globs: {PULLS_DIR.resolve()}\n"
+        f"  the server reads: {fixture_pulls_dir().resolve()}\n"
+        "Set PYTHONPATH to this tree's backend/src (Windows separator is ';') and re-run."
+    )
+    assert len(PRE_SHAPED_REFS) >= 4, (
+        f"globbed only {len(PRE_SHAPED_REFS)} pre-shaped pull(s) {PRE_SHAPED_REFS}; the corpus "
+        "held four when this row landed (synthetic-basic, synthetic-100, ws1-anchor-drift, "
+        "f4s5-cohorts). A shrinking glob makes every parametrized test below quietly narrower."
+    )
+
+
+@pytest.mark.parametrize("ref", ALL_REFS)
+def test_every_pull_can_exercise_the_converse(ref, comps_for) -> None:
+    """Every pull must contain at least one *removed* comp.
+
+    Without this, the converse test above passes on a pull where
+    `removal_class` is `None` everywhere — which is very close to the state the
+    fixtures were actually in, and is exactly how a suite goes green over a
+    corpus that proves nothing. Stated per-ref deliberately: an average over
+    the corpus would let one healthy pull cover for three empty ones.
+    """
+    removed = [c for c in comps_for(ref) if c["removal_class"] is not None]
     assert removed, f"{ref!r} has no removed comps — the converse test is vacuous on it"
     assert all(c["days_since_removal"] is not None for c in removed)
-    if ref != "ws1-anchor-drift":  # two comps, both removed, by construction
-        assert active, f"{ref!r} has no still-active comps — the forward test is vacuous on it"
+
+
+def test_the_corpus_can_exercise_the_forward_direction(comps_for) -> None:
+    """At least one pull must hold a still-active comp.
+
+    Deliberately corpus-level rather than per-ref, and this is a real change of
+    meaning from the per-ref form: `ws1-anchor-drift` (2 comps) and
+    `f4s5-cohorts` (15 comps) are *both* all-removed by construction — they
+    exist to exercise cohort drift and cohort selection, not censoring. The
+    earlier version of this test named `ws1-anchor-drift` as an exemption,
+    which is the same hand-maintained-list trap as the ref list itself: the day
+    `f4s5-cohorts` was globbed in, a name-based exemption would have failed it
+    for being the wrong *kind* of fixture rather than for being wrong.
+
+    So the requirement is stated where it is actually true — of the corpus.
+    """
+    with_active = {
+        ref: sum(1 for c in comps_for(ref) if c["removal_class"] is None) for ref in ALL_REFS
+    }
+    assert any(with_active.values()), (
+        "no pull in the whole corpus has a still-active comp, so the forward direction "
+        f"is vacuous everywhere: {with_active}"
+    )
 
 
 # ---------------------------------------------------------------------------

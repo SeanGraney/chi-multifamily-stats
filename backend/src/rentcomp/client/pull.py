@@ -485,16 +485,20 @@ def _demoted(
                 "intact and is still being used."
             ),
         )
+    # One value, read once: an owed window quoted at 0 has no priced path back to
+    # its evidence, and a message that disagreed with the field beside it would
+    # be the same lie in two places.
+    owed = max(1, window.calls_owed)
     return QueryStatus(
         label=label,
         sig=sig,
         satisfied=False,
         owed=True,
-        owed_calls=window.calls_owed,
+        owed_calls=owed,
         error=(
             f"the evidence that answered this window is no longer complete on disk "
             f"({_evidence_count(entry)}), so the window is open again from offset "
-            f"{window.next_offset} — {_call_count(window.calls_owed)} to finish it"
+            f"{window.next_offset} — {_call_count(owed)} to finish it"
         ),
     )
 

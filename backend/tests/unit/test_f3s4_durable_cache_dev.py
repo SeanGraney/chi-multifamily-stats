@@ -463,8 +463,11 @@ def test_bytes_on_disk_never_promote_a_window_the_manifest_recorded_as_failed(
     still genuinely short of evidence, so "there are bytes here" would close a
     gap that is open and the missing page would never be bought.
 
-    (Page-level resume itself is out of scope by PM ruling — this test pins
-    only that the gap stays open and priced, not how it is finished.)
+    (Page-level resume is queue row 13c's, and it now closes the gap this test
+    leaves open — the missing page really is bought, at its own offset. What
+    this test pins is narrower and unchanged by that: bytes filed under a
+    signature never overturn a recorded FAILURE, whichever granularity the
+    resume then works at.)
     """
     ref = pull_ref_for(**SEARCH)
 

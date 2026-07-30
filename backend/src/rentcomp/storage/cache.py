@@ -302,9 +302,29 @@ def write_raw_response(key: str, sig: str, raw: bytes, *, meta: Mapping) -> Path
     disk, `as_of` frozen ten days behind `today`, and `effective_dom = as_of −
     listed` therefore under-reporting vacancy for every censored comp in the
     entry, while the pull said `complete=True`. The bytes are the paid-for thing
-    (D24); the sidecar is an index over them, and losing it degrades that page's
-    `total_count` to "not recorded" — which the walk treats as "no evidence more
-    exists" and never turns into a purchase.
+    (D24); the sidecar is an index over them.
+
+    ⚠ **This swallow was disclosed as a bounded, fail-safe loss and that claim was
+    wrong.** The sidecar is the only durable record of a response's
+    `X-Total-Count`, so losing it does not merely degrade the index — it removes
+    the one fact that says how large the window is. Measured: 250 records kept of
+    690, and the pull reported `complete=True, missing=()`, because a short page
+    with no total looked like a finished window. **440 paid-for records gone with
+    nothing naming them** — worse than the lost-page defect row 13c exists to fix.
+
+    The repair is in `client/pull.py::_window_state`, not here: the fragility was
+    the short-page rule deciding a question it could not answer, and *corrupting*
+    a sidecar by hand reproduces the identical failure with no failed write
+    anywhere near it. `_StoredPage.indexed` now records that a sidecar could not be
+    read, so "no total was reported" and "the total is on a sidecar we can no
+    longer read" stop being the same value. What remains true of this swallow is
+    only the narrow thing it was for: **the bytes survive, and losing the index is
+    not allowed to report that they never arrived.**
+
+    `backend-reviewer`'s framing is worth keeping in view — D24's letter ("the
+    bytes are never lost") is satisfied here while the index over them silently
+    becomes wrong. That is exactly why the walk must treat a missing index as
+    *unknown* rather than as *absent*.
     """
     if not raw:
         return None

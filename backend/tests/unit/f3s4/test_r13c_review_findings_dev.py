@@ -55,6 +55,17 @@ from rentcomp.storage.config import Config
 from rentcomp.storage.ledger import load_ledger
 from rentcomp.storage.pulls import load_shaped_pull
 
+def _ref() -> str:
+    """The cache ref `SEARCH` resolves to, without running a pull.
+
+    Needed by the blocker test, which has to obstruct a path inside the entry
+    BEFORE the write that would create it.
+    """
+    from rentcomp.client.pull import pull_ref_for
+
+    return pull_ref_for(**SEARCH)
+
+
 def _first_page_sig(offset: int) -> str:
     """The filename stem the spanning window's page at `offset` is filed under."""
     return _page_sig(_sig(planned()[0]), offset)
@@ -515,6 +526,12 @@ def test_a_failed_refresh_never_says_nothing_is_on_disk_over_pages_it_still_hold
     run_pull(**SEARCH, today=TODAY, force_refresh=True, transport=refused.transport)
 
     error = _spanning_error(outcome.pull_ref, corroborate=False)
+    assert "open again from offset" not in error, (
+        f"a failed refresh recorded {error!r} over an entry that is WHOLE. Getting the counts "
+        "right was not enough: one sentence read '6 of 6 records readable' beside 'open again "
+        "from offset 0' — two true halves making a false whole, and the reader cannot tell "
+        "which to believe."
+    )
     assert f"{held} of {SPANNING_TOTAL} records readable" in error, (
         f"a failed refresh recorded {error!r} over an entry still holding {held} of this "
         f"window's records. The reason describes the run; the reader takes it to describe "
@@ -524,3 +541,159 @@ def test_a_failed_refresh_never_says_nothing_is_on_disk_over_pages_it_still_hold
         "a failed refresh lost evidence it was replacing"
     )
     assert no_sockets == []
+
+
+# ===========================================================================
+# THE MERGE BLOCKER — a lost total, end to end, on the write path that loses it
+# ===========================================================================
+
+
+def test_a_window_whose_only_sidecar_never_landed_is_not_reported_whole(
+    home, live_env, no_sockets
+) -> None:
+    """**The blocker, through the write path that actually produces it.**
+
+    The sidecar is the only place a window's `X-Total-Count` is durable, so a
+    sidecar that never lands takes the total with it — and with a SHORT page the
+    walk then declared the window whole. Measured: 250 records kept, 690 on the
+    wire, `complete=True, missing=(), calls_to_complete=0`, **440 paid-for records
+    gone with nothing naming them.**
+
+    Note the shape of the trigger: `storage/cache.py` deliberately swallows a
+    sidecar write failure so the paid-for bytes are never lost (F7), which turns
+    an ordinary `OSError` into a silent path into this state. The fragility was
+    never the swallow, though — it was the short-page rule deciding a question it
+    could not answer, which is why the fix is in the walk.
+    """
+    short_page = [{"id": f"blocker-{n}"} for n in range(250)]
+    windows = {
+        (query.params.get("status"), query.params.get("daysOld")): index
+        for index, query in enumerate(planned())
+    }
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if windows[(request.url.params.get("status"), request.url.params.get("daysOld"))] != 0:
+            return httpx.Response(200, json=[record(700)])
+        if request.url.params.get("offset") is None:
+            return httpx.Response(
+                200, json=short_page, headers={"X-Total-Count": "690"}
+            )
+        return httpx.Response(503, json={"error": "the rest never arrived"})
+
+    # Obstruct ONLY the sidecar of the page about to be written, so the response
+    # lands and its total does not.
+    raw_dir = entry_dir(home, _ref()) / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    blocked = raw_dir / f"{_first_page_sig(0)}.meta.json"
+    blocked.mkdir()
+    (blocked / "not-ours.txt").write_text("x", encoding="utf-8")
+
+    outcome = run_pull(**SEARCH, today=TODAY, transport=httpx.MockTransport(handle))
+
+    kept = raw_dir / f"{_first_page_sig(0)}.json"
+    assert kept.is_file() and len(json.loads(kept.read_bytes())) == 250, (
+        "the 250 records that were paid for are not on disk, so D24 is broken and this test "
+        "is measuring the wrong failure"
+    )
+    assert outcome.complete is False, (
+        "a window holding 250 of 690 records reported itself WHOLE because the sidecar "
+        "carrying the total never landed. There is no `missing` label and no priced path "
+        "back — worse than the lost-page defect this row exists for, which at least left "
+        "`missing` non-empty."
+    )
+    assert outcome.missing, "the 440 absent records are named by nothing"
+    assert no_sockets == []
+
+
+def test_a_lost_sidecar_beside_a_window_whose_total_survives_elsewhere_is_harmless(
+    home, live_env, no_sockets
+) -> None:
+    """The recovery half, so the blocker's fix cannot become "never settle".
+
+    A multi-page window keeps its total on every page's sidecar, so losing one
+    leaves the answer recoverable — and a window that is genuinely whole must
+    still read as whole afterwards, at zero cost. This is also the case my own F7
+    test happened to construct, which is why it missed the blocker entirely.
+    """
+    outcome = run_pull(**SEARCH, today=TODAY, transport=Market().transport)
+    assert outcome.complete is True
+    first = pages_holding(outcome.pull_ref, PAGED_RECORD_IDS[0])[0]
+    first.with_name(f"{first.stem}.meta.json").write_bytes(b"{ not json")
+    load_shaped_pull.cache_clear()
+
+    settled = Denied("one sidecar is corrupt; two others still record the total")
+    again = run_pull(**SEARCH, today=TODAY, transport=settled.transport)
+
+    assert settled.requests == [], (
+        "a window whose total is still recorded on two other sidecars was re-bought over one "
+        "corrupt index file"
+    )
+    assert again.complete is True
+    assert len(load_shaped_pull(outcome.pull_ref, Config()).comps) == expected_comps()
+    assert no_sockets == []
+
+
+# ===========================================================================
+# N1 — a blocked page does not strand a buyable gap below it
+# ===========================================================================
+
+
+def test_a_page_gone_beneath_an_unreadable_one_is_still_bought(
+    home, live_env, no_sockets
+) -> None:
+    """Measured before the fix: `[0, 0]` calls, `owed=False`, forever.
+
+    Page 0 gone and page 1 unreadable, and the unreadable page above erased the
+    only priced path to the one below. "Unreachable through the product, no priced
+    path back" is the phrase this row exists to eliminate, and the trigger here is
+    a transient file lock.
+    """
+    outcome = run_pull(**SEARCH, today=TODAY, transport=Market().transport)
+    assert outcome.complete is True
+    pages_holding(outcome.pull_ref, PAGED_RECORD_IDS[0])[0].unlink()
+    pages_holding(outcome.pull_ref, PAGED_RECORD_IDS[PAGE_SIZE])[0].write_bytes(b"")
+    load_shaped_pull.cache_clear()
+
+    recovery = Market()
+    run_pull(**SEARCH, today=TODAY, transport=recovery.transport)
+
+    assert recovery.calls == 1, (
+        f"the recovery spent {recovery.calls} call(s) ({recovery.sent}); page 0 is gone and "
+        "buyable, and exactly one call delivers it"
+    )
+    assert set(PAGED_RECORD_IDS[:PAGE_SIZE]) <= record_ids_on_disk(outcome.pull_ref), (
+        "page 0 was never bought back, so records the owner paid for are unreachable through "
+        "the product"
+    )
+    load_shaped_pull.cache_clear()
+
+    # And it settles: the page that remains unreadable owes nothing.
+    settled = Denied("page 0 is back; the emptied page is paid for and unreadable")
+    third = run_pull(**SEARCH, today=TODAY, transport=settled.transport)
+    assert settled.requests == [], "the unreadable page is being bought once per attempt"
+    assert third.complete is False and third.missing
+    assert no_sockets == []
+
+
+def test_a_gap_and_a_blocked_page_are_both_named_when_both_exist(
+    home, live_env, no_sockets
+) -> None:
+    """The message must not promise the window will settle after one call.
+
+    With a buyable gap winning `next_offset`, saying only "open again from offset
+    0" sends the user to buy one page and leaves them without the reason the
+    window still will not settle afterwards.
+    """
+    outcome = run_pull(**SEARCH, today=TODAY, transport=Market().transport)
+    pages_holding(outcome.pull_ref, PAGED_RECORD_IDS[0])[0].unlink()
+    emptied = pages_holding(outcome.pull_ref, PAGED_RECORD_IDS[PAGE_SIZE])[0]
+    emptied.write_bytes(b"")
+    load_shaped_pull.cache_clear()
+
+    error = _spanning_error(outcome.pull_ref)
+
+    assert "open again from offset 0" in error, "the buyable gap is not named"
+    assert emptied.name in error, (
+        f"the unreadable page is not named beside the gap, so the message reads as though one "
+        f"call will finish the window: {error!r}"
+    )

@@ -420,6 +420,24 @@ def _corroborate(status: QueryStatus, store: _StoredResponses) -> QueryStatus:
     reported itself whole after losing one and the loader silently shaped less
     evidence than the pull had paid for.
 
+    WIDENED REACH, RECORDED RATHER THAN INHERITED
+    ----------------------------------------------
+    Demotion used to need EVERY page under a signature to be unreadable; now one
+    is enough. So a *transient* unreadable page — a OneDrive or antivirus lock,
+    which on this platform is a real event rather than a thought experiment —
+    demotes a window the old rule left alone. Two consequences, both deliberate:
+    the message names the single file rather than advising anything destructive
+    (`_demoted`), and a gap beneath a blocked page stays buyable
+    (`_window_state`), so a lock cannot strand recoverable evidence.
+
+    A residual, pre-existing and not created here: a window demoted by this
+    function is corrected on every read but never rewritten to disk, because
+    nothing is owed and `run_pull` therefore writes no manifest. `manifest.json`
+    can go on saying `satisfied` while every read says otherwise. **The read route
+    is not silent** — `pull_status` corroborates, so `/api/search` does report
+    `missing`; only the file on disk is stale. Whoever picks that up should know it
+    now fires on one damaged page rather than on all of them.
+
     **Demoting is not the same as owing**, and conflating the two is how a
     window becomes an unbounded purchase. Two cases, one demotion, opposite
     prices:

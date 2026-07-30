@@ -45,6 +45,7 @@ from pathlib import Path
 
 import pytest
 
+from rentcomp.client.rentcast import MAX_LIMIT
 from rentcomp.client.pull import (
     _page_offset,
     _page_sig,
@@ -67,8 +68,12 @@ def home(tmp_path, monkeypatch) -> Path:
     return root
 
 
-def page(offset: int, records: int | None, total: int | None = None) -> _StoredPage:
-    return _StoredPage(offset=offset, records=records, total_count=total)
+def page(
+    offset: int, records: int | None, total: int | None = None, *, indexed: bool = True
+) -> _StoredPage:
+    return _StoredPage(
+        offset=offset, records=records, total_count=total, indexed=indexed
+    )
 
 
 def indexed(*pages: _StoredPage) -> dict[int, _StoredPage]:
@@ -351,3 +356,143 @@ def test_a_total_count_is_read_strictly_or_not_at_all(recorded, expected) -> Non
     spends the owner's month on a malformed sidecar.
     """
     assert _total_of({"total_count": recorded} if recorded is not None else {}) == expected
+
+
+# ===========================================================================
+# the lost-total state — "not reported" and "reported then lost" are not one
+# ===========================================================================
+#
+# Both reach the walk as `total_count is None`, and collapsing them was wrong in
+# BOTH directions at once: a full page with its total lost had a gap invented for
+# it, and a SHORT page with its total lost was declared whole. The second is the
+# worse one, and it is worse than the defect this whole row exists to fix — 440
+# paid-for records gone with no `missing` label naming them.
+
+
+def test_a_short_page_whose_total_was_lost_is_never_declared_whole() -> None:
+    """**The merge blocker, at the layer where it is decidable.**
+
+    Measured before the fix: 250 records on disk, `X-Total-Count: 690` on the
+    wire, that page's sidecar unreadable -> `complete=True, missing=(),
+    calls_to_complete=0`. The short-page rule answered a question it had no
+    standing to answer, because "the server reported no total" and "the total is
+    on a sidecar we can no longer read" arrive here as the same `None`.
+    """
+    state = _window_state(indexed(page(0, records=250, indexed=False)))
+
+    assert state.lost_total is True, (
+        "the walk cannot tell a lost total from an absent one, so the short-page rule is "
+        "about to decide whether 440 paid-for records exist"
+    )
+    assert state.whole is False, (
+        "a window whose only page has an unreadable sidecar was declared whole. Nothing on "
+        "disk can say how large that window is, and the page's own length is not evidence "
+        "about a total the server may well have sent."
+    )
+    assert state.next_offset == 250, (
+        "the window is not whole and names no offset, so there is no priced path back to "
+        "whatever is missing — the exact outcome this row exists to eliminate"
+    )
+
+
+def test_a_full_page_whose_total_was_lost_is_also_undecided_rather_than_guessed() -> None:
+    """The other direction of the same missing distinction.
+
+    A page at `MAX_LIMIT` with its total lost used to have a gap invented for it
+    on nothing better than the page's length. It still asks for another page —
+    which is right — but now because the total is *unknown*, not because 500
+    happens to equal the limit. One rule, both directions.
+    """
+    state = _window_state(indexed(page(0, records=MAX_LIMIT, indexed=False)))
+
+    assert state.lost_total is True and state.whole is False
+    assert state.next_offset == MAX_LIMIT
+
+
+def test_a_sibling_page_that_still_records_a_total_settles_the_window() -> None:
+    """The recovery, and the reason a lost sidecar is usually harmless.
+
+    "The sidecar is gone but another page already proved a total exists" is a
+    different state from "nothing on disk can supply one", and only the second is
+    undecidable. This is also **why my own F7 test missed the blocker**: its
+    scenario had an earlier page whose surviving total the walk carried forward,
+    and §5a's common case — one page per window — has no such sibling.
+    """
+    state = _window_state(
+        indexed(page(0, 2, indexed=False), page(2, 2, total=6), page(4, 2, total=6))
+    )
+
+    assert state.lost_total is False, "a total was recovered, so nothing is undecided"
+    assert state.whole is True
+    assert state.next_offset is None
+
+
+def test_a_genuinely_absent_total_still_ends_the_set_on_a_short_page() -> None:
+    """The narrowing must not swallow the ordinary case.
+
+    A sidecar that reads back fine and simply carries no `total_count` means the
+    server reported none — most windows, per §5a — and a page shorter than the
+    limit is then the end of the set. Reading THAT as undecided would leave every
+    single-page window permanently un-whole and re-bought.
+    """
+    state = _window_state(indexed(page(0, records=1, indexed=True)))
+
+    assert state.lost_total is False
+    assert state.whole is True and state.next_offset is None
+
+
+# ===========================================================================
+# N1 — a blocked page must not annihilate the gaps below it
+# ===========================================================================
+
+
+def test_a_blocked_page_does_not_hide_a_buyable_gap_beneath_it() -> None:
+    """Measured before the fix: page 0 deleted, page 1 emptied -> `next_offset=
+    None, owed=False`, zero calls, forever.
+
+    Page 0 was **gone and buyable**; the unreadable page above it was what made it
+    unreachable through the product. Two aggravations made it worse than the
+    arithmetic: the message claimed "every other page of this pull is intact", and
+    the trigger is transient — a OneDrive or antivirus lock on the page above — so
+    whether the owner could recover paid-for evidence turned on a file lock.
+    """
+    state = _window_state(indexed(page(2, records=None, total=6), page(4, 2, total=6)))
+
+    assert state.whole is False
+    assert state.next_offset == 0, (
+        "the gap at offset 0 is gone and buyable, and an unreadable page ABOVE it erased the "
+        "only priced path to it"
+    )
+    assert state.blocked is not None, "the unreadable page must still be reported"
+
+
+def test_a_blocked_page_still_yields_the_total_its_own_sidecar_records() -> None:
+    """The total was read after the walk had already stopped, so it was never read.
+
+    Measured: "2 of an unknown number of records readable" over an entry whose
+    sidecars both record `total_count=6`. A blocked page's *bytes* are unusable;
+    its sidecar usually is not, and it is often the only thing that knows how
+    large the window is.
+    """
+    state = _window_state(indexed(page(0, 2, total=6), page(2, records=None, total=6)))
+
+    assert state.total_count == 6, (
+        "the blocking page's own sidecar records the window's size and the walk stopped "
+        "before reading it, so every message about this window says 'an unknown number'"
+    )
+
+
+def test_a_blocked_page_with_no_gap_below_it_is_still_missing_and_free() -> None:
+    """The N1 fix must not become "always owed" — B4's pricing is untouched.
+
+    With every other page readable, an unreadable one leaves the window short and
+    owing nothing: the bytes are on disk and paid for, and a re-fetch returns them
+    (queue row 13g is what could tell that from real corruption).
+    """
+    state = _window_state(
+        indexed(page(0, 2, total=6), page(2, records=None, total=6), page(4, 2, total=6))
+    )
+
+    assert state.whole is False
+    assert state.next_offset is None
+    assert state.blocked is not None

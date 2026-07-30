@@ -29,6 +29,32 @@ argument for the synthetic file, stated as executable numbers rather than as a
 comment: inheriting boundary coverage from whatever a real pull happens to hold
 is worth nothing (the standing lesson from F4-S8's mutant M8).
 
+⚠ TWO GRANULARITIES, TWO DIFFERENT NUMBERS — RESOLVED 2026-07-30
+-----------------------------------------------------------------
+An earlier revision of this file asserted "exactly one group disagrees about
+squareFootage" and **measured two**, which was left unresolved when its author
+was stopped. Measured to the bottom: **both numbers are right, at different
+granularities, and the two granularities are not interchangeable.**
+
+* **RECORD/GROUP level = 2.** Two `comp_key` groups hold records that report
+  different square footages.
+* **CHAIN level = 1.** Only one *chain* has spells that disagree — and a chain
+  is what `_build_comp` folds, so a chain is the only granularity at which the
+  positional accident can bite.
+
+The second group is **`3016 W 40th St Unit 1`** (900 vs 1100 sqft) — **not**
+`2453 W 46th Pl`, whose six spells all report 800 and which appears only in the
+`unit` row above. Its two records are 193 days apart, far beyond the 42-day
+stitch threshold, so they stitch into **two separate single-spell comps**, each
+already carrying its own square footage. A one-spell chain has nothing to choose
+between: `chain[-1]` *is* the whole chain. So it is invisible to this row's fix,
+and row 9b's finding of exactly **one** affected comp stands as written.
+
+The lesson is worth more than the count: a census that groups by `comp_key`
+answers a question about *addresses*, and this row's question is about *chains*.
+Both are asserted below, separately and by name, so neither can be silently
+mistaken for the other again.
+
 THE ONE COMP, AND WHY IT IS WORTH A ROW ANYWAY
 -----------------------------------------------
 `2350 S Leavitt St 1R` is two listing ids for one physical unit, which F4-S2's
@@ -68,7 +94,13 @@ from pathlib import Path
 import pytest
 
 from rentcomp.pipeline.keys import comp_key
-from rentcomp.pipeline.shape import shape_raw_pull
+from rentcomp.pipeline.shape import (
+    _dedupe_by_id,
+    _group_key,
+    extract_spells,
+    shape_raw_pull,
+    stitch,
+)
 from rentcomp.storage.config import Config
 
 FIXTURES_DIR = Path(__file__).resolve().parents[3] / "fixtures" / "live-samples"
@@ -100,6 +132,18 @@ PL_46TH_SQFT = 800.0
 #: Comps carrying a $/sqft, before and after. Measured, not predicted.
 SQFT_BEARING_BEFORE = 484
 SQFT_BEARING_AFTER = 485
+
+#: ⚠ The two granularities, kept apart on purpose (see the module docstring).
+#: `comp_key` GROUPS whose raw records report differing square footages. Two:
+#: `2350 s leavitt st|1r` and `3016 w 40th st|1`.
+RECORD_LEVEL_SQFT_DISAGREEMENTS = 2
+#: Stitched CHAINS whose spells disagree about square footage. One. A chain is
+#: what `_build_comp` folds into a comp, so this — not the number above — is the
+#: count of comps this row can move.
+CHAIN_LEVEL_SQFT_DISAGREEMENTS = 1
+#: The group that is in the first count and not the second, named so a future
+#: reader does not have to re-derive why.
+UNREACHABLE_GROUP = "3016 w 40th st|1"
 
 
 def _raw() -> tuple[list[dict], list[dict]]:
@@ -327,6 +371,126 @@ def test_shaping_the_real_pull_still_does_not_depend_on_response_order(real_comp
 
 
 # ---------------------------------------------------------------------------
+# the two granularities — the open question this file was stopped on
+# ---------------------------------------------------------------------------
+
+
+def test_only_one_chain_in_this_pull_can_be_affected_at_all() -> None:
+    """⭐ THE ANSWER to the record-level-vs-chain-level discrepancy.
+
+    ``test_this_pull_cannot_decide_six_of_the_seven_fields`` counts **groups**
+    and gets 2. This counts **chains** and gets 1. Both are correct; only the
+    second one is this row's number, because `_build_comp` folds a *chain*, and
+    a chain is the only place two observations ever compete to supply a field.
+
+    Asserted GREEN today and green after the fix: it is a statement about the
+    committed evidence, not about the selector. If a future re-pull makes it
+    fail, the row's blast radius has genuinely widened and the anchor movement
+    recorded in the queue must be re-measured before anyone trusts it.
+    """
+    active, inactive = _raw()
+    groups: dict[str, list[dict]] = {}
+    for copies in _dedupe_by_id(active, inactive):
+        groups.setdefault(_group_key(copies), []).extend(copies)
+
+    disagreeing_chains: list[tuple[str, list]] = []
+    for key in sorted(groups):
+        spells = extract_spells(groups[key])
+        if not spells:
+            continue
+        for chain in stitch(spells, Config().stitch_gap_days):
+            sqfts = {spell.sqft for spell in chain}
+            if len(sqfts) > 1:
+                disagreeing_chains.append((key, sorted(sqfts, key=repr)))
+
+    assert len(disagreeing_chains) == CHAIN_LEVEL_SQFT_DISAGREEMENTS, (
+        f"expected {CHAIN_LEVEL_SQFT_DISAGREEMENTS} chain whose spells disagree about sqft, got "
+        f"{len(disagreeing_chains)}: {disagreeing_chains}. This is the count of comps row 9b can "
+        f"move; the queue's recorded anchor movement is measured against exactly this set."
+    )
+    assert disagreeing_chains[0][0] == LEAVITT_KEY, (
+        f"the one affected chain should be {LEAVITT_KEY!r}, got {disagreeing_chains[0][0]!r}"
+    )
+
+
+def test_the_second_disagreeing_group_is_out_of_this_rows_reach_and_why() -> None:
+    """`3016 W 40th St Unit 1` — the group that makes the record-level count 2.
+
+    It is **not** `2453 W 46th Pl` (whose six spells all report 800 sqft and
+    which disagrees only about how to spell its unit). It is two listings of the
+    same unit 193 days apart, reporting 1100 and 900 square feet.
+
+    193 days clears the 42-day stitch threshold by a wide margin, so they are
+    **two comps, not one chain** — and each is a single-spell chain that already
+    carries its own square footage. There is nothing for a selector to choose
+    between, at either end. That is why the pull's sqft-bearing count moves by
+    one and not by two.
+
+    This test asserts the *reason*, not just the outcome: if a future config
+    lowered the stitch threshold enough to merge these two, they would become
+    one chain with a genuine 1100-vs-900 conflict — the one shape this row's
+    rule has no answer for (a reported value beating another reported value),
+    and the case the synthetic sibling deliberately leaves to a PM ruling.
+    """
+    active, inactive = _raw()
+    groups: dict[str, list[dict]] = {}
+    for copies in _dedupe_by_id(active, inactive):
+        groups.setdefault(_group_key(copies), []).extend(copies)
+
+    assert UNREACHABLE_GROUP in groups, (
+        f"{UNREACHABLE_GROUP!r} is no longer a group in this pull; the census note in this "
+        f"module's docstring describes evidence that has moved and must be re-measured"
+    )
+    spells = extract_spells(groups[UNREACHABLE_GROUP])
+    assert {spell.sqft for spell in spells} == {900.0, 1100.0}, (
+        f"expected the two records to report 900 and 1100 sqft, got "
+        f"{sorted({s.sqft for s in spells}, key=repr)}"
+    )
+
+    chains = stitch(spells, Config().stitch_gap_days)
+    assert len(chains) == 2, (
+        f"these two listings must remain SEPARATE comps, got {len(chains)} chain(s). If they "
+        f"merged, this pull would contain a conflicting-reported-values case and row 9b's "
+        f"single-comp blast radius would be wrong."
+    )
+    assert all(len(chain) == 1 for chain in chains), (
+        "each is a single-spell chain, so `chain[-1]` is the whole chain and no selection "
+        "rule — positional or completeness-based — can change what either comp publishes"
+    )
+    gap = (chains[1][0].listed - chains[0][-1].removed).days
+    assert gap == 193, f"the off-market gap that keeps them apart is 193 days, measured {gap}"
+    assert gap >= Config().stitch_gap_days, (
+        f"the gap ({gap}d) must clear the stitch threshold ({Config().stitch_gap_days}d)"
+    )
+
+
+def test_the_46th_pl_chain_disagrees_about_its_unit_and_not_its_sqft() -> None:
+    """Rules out the hypothesis that was current before this was measured.
+
+    `2453 W 46th Pl` was the natural suspect for "the second affected comp",
+    because row 9b already names it as the comp whose displayed `unit` flips
+    `Unit 1` -> `# 1`. It is **not** the second sqft disagreement: all six of its
+    spells report 800. Pinned so the wrong explanation cannot be re-adopted by
+    plausibility.
+    """
+    active, inactive = _raw()
+    groups: dict[str, list[dict]] = {}
+    for copies in _dedupe_by_id(active, inactive):
+        groups.setdefault(_group_key(copies), []).extend(copies)
+
+    spells = extract_spells(groups["2453 w 46th pl|1"])
+    assert {spell.sqft for spell in spells} == {PL_46TH_SQFT}, (
+        f"every spell of this chain reports {PL_46TH_SQFT} sqft; got "
+        f"{sorted({s.sqft for s in spells}, key=repr)} — if this ever differs, this comp joins "
+        f"the affected set and the anchor movement must be re-measured"
+    )
+    assert len({spell.unit for spell in spells}) > 1, (
+        "its disagreement is about the unit designator's spelling — presentational, and the "
+        "reason it is NOT a second numeric effect"
+    )
+
+
+# ---------------------------------------------------------------------------
 # the escalation, as executable evidence
 # ---------------------------------------------------------------------------
 
@@ -417,10 +581,11 @@ def test_this_pull_cannot_decide_six_of_the_seven_fields(real_comps) -> None:
         if len(points) > 1:
             disagreements["point"] += 1
 
-    assert disagreements["sqft"] == 1, (
-        f"exactly one group in this pull disagrees about squareFootage; got "
-        f"{disagreements['sqft']}. More means this file's 484->485 census is no longer the "
-        f"whole story and must be re-measured."
+    assert disagreements["sqft"] == RECORD_LEVEL_SQFT_DISAGREEMENTS, (
+        f"expected {RECORD_LEVEL_SQFT_DISAGREEMENTS} comp_key GROUPS whose raw records report "
+        f"different square footages; got {disagreements['sqft']}. ⚠ This is the RECORD-level "
+        f"count and it is deliberately NOT this row's count — see "
+        f"test_only_one_chain_in_this_pull_can_be_affected_at_all, and this module's docstring."
     )
     for field in ("beds", "baths", "point"):
         assert disagreements[field] == 0, (

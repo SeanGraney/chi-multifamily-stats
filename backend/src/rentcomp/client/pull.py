@@ -49,13 +49,38 @@ THE FOUR THINGS THIS MODULE IS RESPONSIBLE FOR
    and the missing windows are recorded in the manifest, where they survive the
    process and can be read back without spending a call.
 
-RESUME GRANULARITY (a logged [DEFAULT])
-----------------------------------------
-A query is satisfied when its whole result arrived; the resume diff is
-per-query. Page-level resume (re-entering a truncated query at its last offset)
-is out of scope by PM ruling (queue row 13c) and buys nothing here: no
-committed fixture and no live pull in this product's plan has yet needed more
-than one page per window.
+RESUME GRANULARITY — THE PAGE, NOT THE QUERY (queue row 13c)
+-------------------------------------------------------------
+A window is satisfied when every page its own evidence accounts for is on disk
+and readable — never when *any one* page filed under its signature parses. The
+unit that was paid for is the **call** (§5a's per-call file granularity), so it
+is also the unit of satisfaction and the unit of a resume: a query interrupted
+between calls is re-entered at the offset its held pages account for, and a
+query that lost one page buys back that page and nothing else.
+
+That is not hypothetical arithmetic. The committed gate fixture holds 500
+records of a set of 690, so a real pull of that search spans several calls, and
+at that granularity both of F3-S4's invariants had a second unguarded edge: a
+window that lost its first page reported itself whole (`complete=True,
+missing=()`), the loader then shaped fewer comps than the pull had paid for,
+and — worst of the three — the next attempt sent nothing at all, so the lost
+records were unreachable without a REFRESH that re-bought the whole window.
+
+**The page index is derived from the store on every read, never held only in
+the manifest.** `_stored_responses` reads the same files `storage/pulls.py`
+shapes from, through the same `records_from_raw`, so what this module calls
+held and what the loader can produce are the same set *by shared code* rather
+than by parallel logic (queue row 13e's binding lesson: recording the index
+only in the manifest would make the index stricter than the store, and an entry
+that lost its manifest while keeping every page would be re-bought). Rebuilding
+that index costs a directory scan and a parse, and no call.
+
+**It is keyed on the response filename's own `-offNNN` suffix and on the
+sidecar's `offset`/`total_count` — never on the sidecar's `sig`.** The two
+write paths below file different `sig` values (the live path a per-page hash,
+the fixture path the per-query signature), so grouping by `meta["sig"]` would
+work against fixtures and silently not against the wire. Reconciling the two
+is queue row 13h's; this module only declines to depend on either.
 
 F3-S4 — WHAT THE RESUME DIFF IS ACTUALLY JUDGED ON
 ---------------------------------------------------
@@ -313,7 +338,9 @@ def run_pull(
         spent_before = _require_budget(len(owed))
 
     for query in owed:
-        status, arrived = _fetch_one(key, query, today, transport)
+        status, arrived = _fetch_one(
+            key, query, today, transport, restart=force_refresh
+        )
         known[_sig(query)] = status
         if arrived:
             # A response reached the store, so this pull really did observe the
@@ -371,12 +398,18 @@ def pull_status(pull_ref: str) -> PullOutcome:
 
 
 def _corroborate(status: QueryStatus, store: _StoredResponses) -> QueryStatus:
-    """A recorded window's status, checked against the bytes behind it.
+    """A recorded window's status, checked against the pages behind it.
 
-    Demotion only: a claimed satisfaction with no usable response left on disk
-    is demoted to an open window. A recorded *failure* is never promoted here —
-    that would need the plan to know a signature was even expected, and
-    `_reconcile` (which has it) is where that judgement is made.
+    Demotion only: a claimed satisfaction whose pages do not add up to the
+    evidence they themselves account for is demoted to an open window. A
+    recorded *failure* is never promoted here — that would need the plan to know
+    a signature was even expected, and `_reconcile` (which has it) is where that
+    judgement is made.
+
+    **Judged per page (queue row 13c).** Satisfaction used to be granted to any
+    signature with one readable file under it, so a window spanning three calls
+    reported itself whole after losing one and the loader silently shaped less
+    evidence than the pull had paid for.
 
     **Demoting is not the same as owing**, and conflating the two is how a
     window becomes an unbounded purchase. Two cases, one demotion, opposite
@@ -399,30 +432,45 @@ def _corroborate(status: QueryStatus, store: _StoredResponses) -> QueryStatus:
     exactly how to clear it. Re-buying it spends the owner's month, with no
     stopping condition — which is the failure D24 exists to prevent.
     """
-    if not status.satisfied or status.sig in store.held:
+    window = store.window(status.sig)
+    if not status.satisfied or window.whole:
         return status
-    if status.sig in store.filed:
+    return _demoted(status.label, status.sig, window)
+
+
+def _demoted(label: str, sig: str, window: _WindowState) -> QueryStatus:
+    """An open window, priced by whether its missing evidence is gone or merely
+    unreadable — the asymmetry `_corroborate` documents, stated once so the
+    read path and `_reconcile` cannot drift apart about it."""
+    if window.next_offset is None:
         return QueryStatus(
-            label=status.label,
-            sig=status.sig,
+            label=label,
+            sig=sig,
             satisfied=False,
             owed=False,
             error=(
-                "this window's response is on disk and cannot be read as listings. It was "
-                "paid for and re-fetching returns the same bytes, so no call is owed for "
-                "it. If the file itself is damaged rather than the response, delete this "
-                "cache entry and search again."
+                "this window holds a response on disk that cannot be read as listings "
+                f"({_evidence_count(window)}). It was paid for and re-fetching returns the "
+                "same bytes, so no call is owed for it. If the file itself is damaged rather "
+                "than the response, delete this cache entry and search again."
             ),
         )
     return QueryStatus(
-        label=status.label,
-        sig=status.sig,
+        label=label,
+        sig=sig,
         satisfied=False,
         error=(
-            "the response that answered this window is no longer on disk, so the window "
-            "is open again"
+            f"the evidence that answered this window is no longer complete on disk "
+            f"({_evidence_count(window)}), so the window is open again from offset "
+            f"{window.next_offset}"
         ),
     )
+
+
+def _evidence_count(window: _WindowState) -> str:
+    """"2 of 6 records readable" — what the user is short, in records."""
+    promised = window.total_count if window.total_count is not None else "an unknown number of"
+    return f"{window.fetched} of {promised} records readable"
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +483,10 @@ def _fetch_one(
     query: PlannedQuery,
     today: date,
     transport: httpx.BaseTransport | None,
+    *,
+    restart: bool,
 ) -> tuple[QueryStatus, bool]:
-    """Fetch one planned window, keeping every response byte it costs.
+    """Fetch what one planned window is missing, one PAGE at a time.
 
     Returns `(status, arrived)`, where `arrived` is True when at least one
     response body reached the store during this call — the ONE signal that
@@ -445,107 +495,193 @@ def _fetch_one(
     because a forced refresh rewrites the same filenames and would be
     invisible to any comparison of what is held.
 
+    **One call per gap, and the gap is re-read off disk between calls** (queue
+    row 13c). Handing the whole window to `fetch_listings` and letting it
+    paginate forward would re-buy every page after the first missing one — three
+    calls where one page was lost, on a 50-call month — so each turn asks the
+    store what the window is short, buys exactly that page, and asks again. A
+    window with nothing missing costs nothing and never constructs a client.
+
     A failure is returned, never raised: §5a's "incomplete first pull →
     usable, with the gap named loudly". Raising here would throw away the
     windows that did arrive — and on the live path, throw away calls that were
     already paid for.
+
+    Args:
+        restart: ignore the pages already on disk and re-buy the window from its
+            first page. This is the user's REFRESH (`force_refresh`) and nothing
+            else — "go buy it again" rather than "finish what I paid for". The
+            old pages are overwritten per call and never deleted, so a refresh
+            that fails part way still leaves the evidence it was replacing.
     """
     base = _sig(query)
-    persisted: set[int] = set()
+    bought: set[int] = set()
+    attempted: set[int] = set()
+
+    while True:
+        pages = _held_pages(key, base, only=bought if restart else None)
+        state = _window_state(pages)
+        if state.whole:
+            return QueryStatus(label=_label(query), sig=base, satisfied=True), bool(bought)
+        if state.next_offset is None:
+            # A page is filed and unreadable. Missing, and not owed: another
+            # call returns the same bytes (D24).
+            return _demoted(_label(query), base, state), bool(bought)
+        offset = state.next_offset
+        if offset in attempted:
+            # The page was asked for and did not land. Reporting satisfied here
+            # is the lie this row removes; asking again inside this loop would
+            # be a purchase per iteration with no stopping condition.
+            return _short(query, base, state, None), bool(bought)
+        attempted.add(offset)
+
+        landed, failure = _fetch_page(key, base, query, offset, today, transport)
+        bought |= landed
+        if failure is not None:
+            state = _window_state(_held_pages(key, base, only=bought if restart else None))
+            if state.whole:
+                # The failure was on a page the window turned out not to need.
+                return QueryStatus(label=_label(query), sig=base, satisfied=True), bool(bought)
+            if state.next_offset is None:
+                return _demoted_with(_label(query), base, state, failure), bool(bought)
+            return _short(query, base, state, failure), bool(bought)
+
+
+def _fetch_page(
+    key: str,
+    base: str,
+    query: PlannedQuery,
+    offset: int,
+    today: date,
+    transport: httpx.BaseTransport | None,
+) -> tuple[set[int], Exception | None]:
+    """Buy ONE page of a window and keep it, whatever else goes wrong.
+
+    Returns `(offsets filed by this call, the failure if there was one)`. Both
+    at once and deliberately: a `ResponseUnusableError` is raised *after* the
+    sink has already filed the bytes, and an interruption between pages leaves
+    the earlier ones paid for — D24 is unconditional about them.
+    """
+    landed: set[int] = set()
 
     def sink(params: dict, raw: bytes, meta: dict) -> None:
         """D24 write-through. Called by `RentCastClient` per call, with the
         body exactly as it arrived, BEFORE anything parses it."""
-        offset = _offset_of(meta)
-        if write_raw_response(key, _page_sig(base, offset), raw, meta=_meta(meta, today)):
-            persisted.add(offset)
+        page_offset = _offset_of(meta)
+        if write_raw_response(key, _page_sig(base, page_offset), raw, meta=_meta(meta, today)):
+            landed.add(page_offset)
 
     client = RentCastClient(transport=transport, sink=sink)
     try:
-        result = client.fetch_listings(query.params)
-    except ResponseUnusableError as exc:
-        # A 2xx that arrived, was billed, and is filed (the sink runs before
-        # anything parses) — and that this parser cannot read. Not satisfied:
-        # its evidence is unusable, so `missing` must keep naming it. Not
-        # owed either: another call returns the same bytes, and D24's whole
-        # point is that a parsing bug or a schema surprise costs nothing.
-        if persisted:
-            return (
-                QueryStatus(
-                    label=_label(query),
-                    sig=base,
-                    satisfied=False,
-                    owed=False,
-                    error=(
-                        f"the response arrived and could not be read: {exc}. It is filed "
-                        "under this pull; re-fetching would return the same bytes, so no "
-                        "call is owed for it."
-                    ),
-                ),
-                True,
-            )
-        # Fixture mode: nothing reached the sink, so there is nothing on disk
-        # and the window is owed like any other failure.
-        return _failed(query, base, exc), False
-    except RentCastError as exc:
-        # The call delivered nothing (non-2xx, transport failure, no fixture,
-        # budget). A retry might; the window stays owed.
-        return _failed(query, base, exc), bool(persisted)
-    except OSError as exc:
-        # The store refused the bytes (a directory in the way, a full disk, a
-        # permission). One window's storage failure must not lose the windows
-        # already filed under this ref, so it is reported like any other gap
-        # rather than unwinding the whole pull.
-        return _failed(query, base, exc), bool(persisted)
+        # `max_calls=1` is what makes this a PAGE fetch rather than a window
+        # fetch: the client would otherwise paginate on past the gap and re-buy
+        # pages this pull is already holding.
+        result = client.fetch_listings(_page_request(query.params, offset), max_calls=1)
+    except (RentCastError, OSError) as exc:
+        # A non-2xx, a transport failure, a missing fixture, the budget — or the
+        # store refusing the bytes (a directory in the way, a full disk). One
+        # window's failure must not lose the windows already filed under this
+        # ref, so it is reported rather than raised.
+        return landed, exc
 
     # Fixture mode never reaches the sink (`_fetch_from_fixtures` returns
-    # without emitting), so its pages are written here instead. Keyed on the
+    # without emitting), so its page is written here instead. Keyed on the
     # page's own offset rather than on the mode, so neither path can
     # double-write and neither can be forgotten.
-    for page in result.pages:
-        if page.offset in persisted:
-            continue
-        written = write_raw_response(
-            key,
-            _page_sig(base, page.offset),
-            page.raw,
-            meta=_meta(
-                {
-                    "sig": base,
-                    "offset": page.offset,
-                    "total_count": page.total_count,
-                    "fetched_at": today.isoformat(),
-                },
-                today,
-            ),
-        )
-        if written:
-            persisted.add(page.offset)
+    try:
+        for page in result.pages:
+            if page.offset in landed:
+                continue
+            if write_raw_response(
+                key,
+                _page_sig(base, page.offset),
+                page.raw,
+                meta=_meta(
+                    {
+                        "sig": base,
+                        "offset": page.offset,
+                        "total_count": page.total_count,
+                        "fetched_at": today.isoformat(),
+                    },
+                    today,
+                ),
+            ):
+                landed.add(page.offset)
+    except OSError as exc:
+        return landed, exc
+    return landed, None
 
-    if result.complete:
-        return QueryStatus(label=_label(query), sig=base, satisfied=True), bool(persisted)
-    return (
-        QueryStatus(
-            label=_label(query),
-            sig=base,
-            satisfied=False,
-            error=(
-                f"the response was truncated: {result.fetched} of "
-                f"{result.total_count if result.total_count is not None else 'an unknown number of'} "
-                "records arrived"
-            ),
-        ),
-        bool(persisted),
+
+def _page_request(params: dict, offset: int) -> dict:
+    """One page's params. `offset` is absent on page 0 so the request hashes to
+    the same fixture signature the gate's un-offset call did — the same rule
+    `client/rentcast.py::_page_params` applies on the wire, restated here
+    because fixture mode looks its response up from these params directly."""
+    page = {key: value for key, value in params.items() if key != "offset"}
+    if offset:
+        page["offset"] = offset
+    return page
+
+
+def _held_pages(
+    key: str, base: str, *, only: set[int] | None
+) -> dict[int, _StoredPage]:
+    """One window's page index, read back off disk.
+
+    Re-read rather than carried in memory, so that what this pull believes it
+    holds and what the loader can shape are the same fact — the property queue
+    row 13e made binding. `only` restricts it to the offsets THIS run bought,
+    which is what a REFRESH means.
+    """
+    pages = _stored_responses(key).pages.get(base) or {}
+    return pages if only is None else {
+        offset: page for offset, page in pages.items() if offset in only
+    }
+
+
+def _short(
+    query: PlannedQuery, base: str, state: _WindowState, exc: Exception | None
+) -> QueryStatus:
+    """A window still owed a page, recorded with the reason §5a asks for.
+
+    The reason carries the exception's own message, so a 429 ("wait") and a 500
+    ("retry") stay the different instructions they are — and the offset, so the
+    record says which call would close the gap rather than only that one would.
+    """
+    if state.fetched == 0 and not state.filed and exc is not None:
+        # Nothing of this window is on disk: the failure IS the whole story, and
+        # dressing it up as a truncation would bury the reason.
+        return QueryStatus(label=_label(query), sig=base, satisfied=False, error=str(exc))
+    truncation = (
+        f"the response was truncated: {_evidence_count(state)}, so the window is open "
+        f"again from offset {state.next_offset}"
+    )
+    return QueryStatus(
+        label=_label(query),
+        sig=base,
+        satisfied=False,
+        error=truncation if exc is None else f"{truncation} — the next page did not arrive: {exc}",
     )
 
 
-def _failed(query: PlannedQuery, base: str, exc: Exception) -> QueryStatus:
-    """A window that did not arrive, recorded with the reason §5a asks for.
+def _demoted_with(
+    label: str, base: str, state: _WindowState, exc: Exception
+) -> QueryStatus:
+    """`_demoted`, with the failure that produced the unreadable page named.
 
-    The reason is the exception's own message, so a 429 ("wait") and a 500
-    ("retry") stay the different instructions they are.
+    The two are the same verdict from two directions — the read path finds bytes
+    it cannot use, the fetch path is told so by `ResponseUnusableError` — and
+    only the fetch path knows *why*, which is what a user needs to tell a schema
+    change from a damaged file.
     """
-    return QueryStatus(label=_label(query), sig=base, satisfied=False, error=str(exc))
+    demoted = _demoted(label, base, state)
+    return QueryStatus(
+        label=demoted.label,
+        sig=demoted.sig,
+        satisfied=False,
+        owed=False,
+        error=f"the response arrived and could not be read: {exc}. {demoted.error}",
+    )
 
 
 def _meta(meta: dict, today: date) -> dict:
@@ -650,46 +786,161 @@ def _reconcile(
         if status is None:
             # The manifest is unreadable, or readable and silent about this
             # window. Bytes filed under it were paid for; re-buying them to
-            # rebuild an index is the double-pay D24 forbids.
-            if sig in store.held:
+            # rebuild an index is the double-pay D24 forbids — so the index is
+            # rebuilt from the pages themselves, whole ones and partial ones
+            # alike (queue row 13e: index and store move together).
+            window = store.window(sig)
+            if window.whole:
                 known[sig] = QueryStatus(label=_label(query), sig=sig, satisfied=True)
+            elif window.filed:
+                known[sig] = _demoted(_label(query), sig, window)
             continue
         known[sig] = _corroborate(status, store)
     return known
 
 
 @dataclass(frozen=True)
-class _StoredResponses:
-    """What a cache entry's `raw/` directory actually holds, in two questions.
+class _StoredPage:
+    """One CALL's worth of a window, as it survives on disk.
 
-    `held` — signatures with at least one USABLE response. Usable, not merely
-    present: a file truncated by a crash, emptied, or standing as a directory
-    is present and is not evidence, and a pull that counted it would report
-    itself whole over bytes nothing can be derived from. `read_raw_records`
-    draws that line in one place, so what this module calls held and what
+    `records` is `None` for a file that is present and is **not** evidence — a
+    body truncated by a crash, emptied, or of a shape `records_from_raw` cannot
+    read. Present is not usable, and a pull that counted it would report itself
+    whole over bytes nothing can be derived from. The line is drawn by
+    `read_raw_records`, in one place, so what this module calls held and what
     `storage/pulls.py` can actually shape are the same set by shared code.
 
-    `filed` — signatures with a response file at all, usable or not. The
-    difference between the two sets is exactly "we are holding bytes we cannot
-    read", which is the one state where a window is missing and still owes
-    nothing. Without it, "unusable" and "absent" are indistinguishable and the
-    unusable case is re-bought forever.
+    `total_count` is what *this* call's `X-Total-Count` promised, recorded in
+    the sidecar at write time. It is the only durable statement that more of a
+    window exists than one page holds, and therefore the only thing that can
+    make an absent page worth a call rather than a guess.
     """
 
-    held: frozenset[str]
-    filed: frozenset[str]
+    offset: int
+    records: int | None
+    total_count: int | None
+
+
+@dataclass(frozen=True)
+class _WindowState:
+    """What one window's page set adds up to — §5a's three answers, per query.
+
+    * `whole` — every page the evidence itself accounts for is on disk and
+      readable. This is "satisfied", and it is a claim about pages, not about a
+      signature having *something* under it.
+    * `next_offset` — the offset a resume must ask for, or `None` when no call
+      would deliver anything this pull does not already hold. This is the whole
+      of the money question: `None` prices the window at zero calls.
+    * `filed` — any response file at all under this window.
+
+    The three combine into F3-S4's pricing, one level down: a page that is
+    **gone** is worth a call (`next_offset` names it); a page that is **there
+    and unreadable** is not (`next_offset is None`, `whole is False`), because
+    re-fetching returns the same bytes and the loop would have no stopping
+    condition. Queue row 13g is the row that may revisit that asymmetry, by
+    recording a digest at write time; until then both levels price it the same
+    way, deliberately.
+    """
+
+    filed: bool
+    whole: bool
+    next_offset: int | None
+    fetched: int
+    total_count: int | None
+
+
+@dataclass(frozen=True)
+class _StoredResponses:
+    """A cache entry's `raw/` directory, indexed by query and then by page."""
+
+    pages: dict[str, dict[int, _StoredPage]]
+
+    def window(self, sig: str) -> _WindowState:
+        return _window_state(self.pages.get(sig) or {})
 
 
 def _stored_responses(key: str) -> _StoredResponses:
-    """Both sets in one pass over the entry's raw responses."""
-    held: set[str] = set()
-    filed: set[str] = set()
+    """The page index, in one pass over the entry's raw responses.
+
+    Grouped by the **filename's** query signature (`_query_sig_of`), because
+    that is the one identifier both write paths agree on — see the module
+    docstring on the sidecar's `sig`.
+
+    A **directory** standing where a response belongs is skipped rather than
+    counted as filed: no bytes were ever kept there, so the page is absent, not
+    unreadable, and a call really would deliver something this pull does not
+    have. (`storage/cache.py::_clear_directory_obstruction` treats an empty one
+    as the debris it is, so the recovery write succeeds.)
+    """
+    pages: dict[str, dict[int, _StoredPage]] = {}
     for path in raw_response_paths(key):
-        sig = _query_sig_of(path.stem)
-        filed.add(sig)
-        if read_raw_records(path) is not None:
-            held.add(sig)
-    return _StoredResponses(held=frozenset(held), filed=frozenset(filed))
+        if path.is_dir():
+            continue
+        records = read_raw_records(path)
+        meta = read_raw_meta(path)
+        offset = _page_offset(meta, path.stem)
+        pages.setdefault(_query_sig_of(path.stem), {})[offset] = _StoredPage(
+            offset=offset,
+            records=None if records is None else len(records),
+            total_count=_total_of(meta),
+        )
+    return _StoredResponses(pages=pages)
+
+
+def _window_state(pages: dict[int, _StoredPage]) -> _WindowState:
+    """Walk a window's pages the way the client paginated them.
+
+    The same arithmetic `client/rentcast.py::_fetch_live` uses to decide it has
+    the whole set — start at 0, advance by the records each page actually
+    carried, stop on a known total or on a short/empty page — run backwards over
+    what is on disk. Sharing the rule is the point: a walk that computed
+    "whole" differently from the loop that fetched it would re-open a window
+    that really is complete, on every attempt, without bound.
+
+    **A gap is owed only when something on disk says more records exist** —
+    either a recorded `total_count` above what is readable, or a page filed at a
+    *higher* offset than the gap (which cannot exist without the pages before
+    it). Without that guard an ordinary single-page window would look like page
+    0 of a longer set and be bought again forever; with it, the code invents no
+    purchase it cannot justify from the evidence.
+    """
+    if not pages:
+        return _WindowState(
+            filed=False, whole=False, next_offset=0, fetched=0, total_count=None
+        )
+
+    offset = 0
+    fetched = 0
+    total: int | None = None
+    while True:
+        page = pages.get(offset)
+        if page is None:
+            more = (total is not None and fetched < total) or any(
+                held > offset for held in pages
+            )
+            return _WindowState(
+                filed=True,
+                whole=not more,
+                next_offset=offset if more else None,
+                fetched=fetched,
+                total_count=total,
+            )
+        if page.records is None:
+            # Paid for, filed, and not evidence. Missing, and NOT owed: another
+            # call returns the same bytes (D24, and `_corroborate`'s rule).
+            return _WindowState(
+                filed=True, whole=False, next_offset=None, fetched=fetched, total_count=total
+            )
+        if page.total_count is not None:
+            total = page.total_count
+        fetched += page.records
+        if page.records == 0 or (total is not None and fetched >= total):
+            # An empty page ends the set (the client's own defensive rule), and
+            # so does reaching the total the window promised.
+            return _WindowState(
+                filed=True, whole=True, next_offset=None, fetched=fetched, total_count=total
+            )
+        offset += page.records
 
 
 def _held_as_of(key: str, recorded: Manifest | None, today: date) -> date:
@@ -837,3 +1088,40 @@ def _offset_of(meta: dict) -> int:
         return int(meta.get("offset") or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _page_offset(meta: dict, stem: str) -> int:
+    """Which page of its window a stored response is — the sidecar first, the
+    filename second.
+
+    The sidecar's `offset` is reliable on BOTH write paths (unlike its `sig`,
+    see the module docstring), so it leads. The filename's own `-offNNN` suffix
+    is the fallback for a response filed before the sidecar carried the field,
+    or one hand-written by a fixture; the two cannot disagree for anything this
+    module wrote, because `_page_sig` formats that suffix from the same number.
+    """
+    if isinstance(meta.get("offset"), (int, str)):
+        return _offset_of(meta)
+    from_name = _page_offset_of(stem)
+    return from_name if from_name is not None else 0
+
+
+def _page_offset_of(stem: str) -> int | None:
+    """`y2025-inactive-off002` → 2, or `None` for a name without a page marker."""
+    _base, marker, tail = stem.rpartition(_PAGE_MARKER)
+    if not marker or not tail.isdigit():
+        return None
+    return int(tail)
+
+
+def _total_of(meta: dict) -> int | None:
+    """The `X-Total-Count` a call reported, out of its sidecar.
+
+    The one durable statement that a window holds more than the page in front of
+    us — so it is read strictly: a bool, a float, a string or a negative number
+    is "not recorded", never a total to price a call against.
+    """
+    total = meta.get("total_count")
+    if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+        return None
+    return total

@@ -150,6 +150,18 @@ class DerivedComp(BaseModel):
     #: number `removal_class` was decided by, and the "4d" in F4-S8's row copy
     #: *"removed 4d — classifying"*. `None` iff `removal_class` is `None`.
     #:
+    #: That "iff" is a **pipeline guarantee, not a type-system one**, and it
+    #: holds because `shape.py::_build_comp` always sets
+    #: `StitchedComp.first_listed` and derives `removal_class` from the same
+    #: chain end that decides `censored` — so `removed_on` answers `None`
+    #: exactly when `removal_class` is `None`. A comp assembled any other way
+    #: can break it, and every pre-shaped synthetic fixture did until row 10b:
+    #: they stated a rung on a comp that never said when it was listed, so the
+    #: row rendered *"removed nulld — classifying"* on the very pull the
+    #: Layer-2 suite derives against. What keeps that from returning is
+    #: `backend/tests/unit/test_r10b_preshaped_pulls_are_shapeable.py` —
+    #: read it before adding a pre-shaped pull.
+    #:
     #: A **count, not a date**, deliberately. `removed_on` alone would leave
     #: the view subtracting it from `meta.as_of` — a derivation the view is not
     #: allowed to perform (D5) and, in JS, date arithmetic across a timezone

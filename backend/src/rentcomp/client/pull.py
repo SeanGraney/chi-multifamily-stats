@@ -517,33 +517,48 @@ def _fetch_one(
     bought: set[int] = set()
     attempted: set[int] = set()
 
-    while True:
-        pages = _held_pages(key, base, only=bought if restart else None)
-        state = _window_state(pages)
-        if state.whole:
-            return QueryStatus(label=_label(query), sig=base, satisfied=True), bool(bought)
-        if state.next_offset is None:
-            # A page is filed and unreadable. Missing, and not owed: another
-            # call returns the same bytes (D24).
-            return _demoted(_label(query), base, state), bool(bought)
-        offset = state.next_offset
-        if offset in attempted:
-            # The page was asked for and did not land. Reporting satisfied here
-            # is the lie this row removes; asking again inside this loop would
-            # be a purchase per iteration with no stopping condition.
-            return _short(query, base, state, None), bool(bought)
-        attempted.add(offset)
+    def window() -> _WindowState:
+        return _window_state(_held_pages(key, base, only=bought if restart else None))
 
-        landed, failure = _fetch_page(key, base, query, offset, today, transport)
+    while True:
+        state = window()
+        # Nothing left worth buying: the window is whole, or it is holding bytes
+        # it cannot read (paid for, and a re-fetch returns the same ones), or it
+        # is short of a page it has already asked for once in this run — asking
+        # again here would be a purchase per iteration with no stopping
+        # condition, which is the shape D24 treats as different in kind.
+        if state.whole or state.next_offset is None or state.next_offset in attempted:
+            return _verdict(query, base, state, None), bool(bought)
+        attempted.add(state.next_offset)
+
+        landed, failure = _fetch_page(key, base, query, state.next_offset, today, transport)
         bought |= landed
         if failure is not None:
-            state = _window_state(_held_pages(key, base, only=bought if restart else None))
-            if state.whole:
-                # The failure was on a page the window turned out not to need.
-                return QueryStatus(label=_label(query), sig=base, satisfied=True), bool(bought)
-            if state.next_offset is None:
-                return _demoted_with(_label(query), base, state, failure), bool(bought)
-            return _short(query, base, state, failure), bool(bought)
+            # Re-read before judging: a `ResponseUnusableError` files its bytes
+            # on the way past, so what this window now holds is a fact about
+            # disk, not about the exception.
+            return _verdict(query, base, window(), failure), bool(bought)
+
+
+def _verdict(
+    query: PlannedQuery, base: str, state: _WindowState, failure: Exception | None
+) -> QueryStatus:
+    """One window's status, read off its page state.
+
+    The single triage both the top of `_fetch_one`'s loop and its failure branch
+    go through, so the two cannot answer the same disk state two different ways —
+    the drift class that failed F3-S4 (one rule for the fetch path, another for
+    the read path) reappearing inside one function.
+    """
+    if state.whole:
+        return QueryStatus(label=_label(query), sig=base, satisfied=True)
+    if state.next_offset is None:
+        return (
+            _demoted(_label(query), base, state)
+            if failure is None
+            else _demoted_with(_label(query), base, state, failure)
+        )
+    return _short(query, base, state, failure)
 
 
 def _fetch_page(

@@ -359,16 +359,25 @@ def test_a_reported_sqft_of_zero_does_not_outrank_a_real_measurement() -> None:
 def test_a_negative_sqft_is_never_published_as_a_units_size() -> None:
     """The other side of the same coin. A negative square footage is not data;
     publishing it puts an impossible number on the wire and in front of the
-    owner (`sqft: -50`), even though `psf` correctly declines to divide by it."""
+    owner (`sqft: -50`), even though `psf` correctly declines to divide by it.
+
+    STRENGTHENED ON RESUME (2026-07-30): this previously accepted `sqft is None`
+    as a pass, i.e. it would have gone green on a fix that threw the reported
+    640 away. That is a strictly worse outcome than today's — the comp loses a
+    real measurement AND leaves every median — and it is the same shape the
+    sibling zero-sqft test above rejects outright. The two are one rule with one
+    argument, so they now assert the same thing.
+    """
     comp = one_comp(
         record("real", listed="2025-03-01", removed="2025-04-01", sqft=640.0),
         record("bad", listed="2025-04-10", removed="2025-05-01", sqft=-50.0),
     )
-    assert comp.sqft is None or comp.sqft > 0.0, (
-        f"the comp published sqft={comp.sqft}. Either prefer the real measurement or report "
-        f"nothing — a negative area is not an observation."
+    assert comp.sqft == 640.0, (
+        f"the comp published sqft={comp.sqft}. A negative area is not an observation, so the "
+        f"real 640 must win — reporting None instead would discard a measurement the pull "
+        f"holds and drop the comp out of every median, which is worse than the bug."
     )
-    assert comp.psf is None or comp.psf > 0.0
+    assert comp.psf == pytest.approx(2000.0 / 640.0)
 
 
 def test_absent_coordinates_do_not_become_a_real_place_on_the_map() -> None:
@@ -449,6 +458,133 @@ def test_no_identity_field_is_invented(
             f"chain (observed: {sorted(observed, key=repr)}). A shaped comp may only restate "
             f"its evidence."
         )
+
+
+# ===========================================================================
+# COMPLETENESS TIES — added on resume, 2026-07-30
+#
+# The dispatch asked specifically for adversarial probes of the INPUT SPACE:
+# "ties on completeness, all observations equally incomplete, a chain of one,
+# conflicting non-null values, disagreement in a field nobody looked at." Four
+# of those five were already covered above. The fifth — a genuine TIE on the
+# completeness score — was not, and its sharp form turns out to expose a design
+# fork that the row's own wording ("the most-complete observation") does not
+# resolve. See the first test below; it is the reason this section exists.
+# ===========================================================================
+
+
+def test_complementary_observations_do_not_lose_evidence_to_each_other() -> None:
+    """⚠⚠ THE DESIGN FORK — A PM RULING, NOT A QA CHOICE. Flagged, not locked.
+
+    Two observations of one unit, each reporting exactly what the other omits:
+
+        A: sqft 950, baths MISSING
+        B: sqft MISSING, baths 2.5
+
+    They **tie** on any whole-observation completeness score — each reported one
+    optional attribute. So "pick the most complete OBSERVATION and take all
+    seven fields from it" cannot help but discard one of the two reported
+    values, whichever way the tie breaks. Per-FIELD selection ("for each field,
+    prefer an observation that reported it") keeps both.
+
+    That is a real fork, and row 9b's wording does not settle it:
+
+    * **whole-observation** selection is internally consistent — the comp is a
+      coherent snapshot of one real observation, and `lat`/`lng` stay paired
+      automatically (see `test_a_comps_coordinate_is_a_place_some_observation_
+      actually_reported`, which per-field selection can violate);
+    * **per-field** selection is strictly more evidence, which is the exact
+      argument the PM already accepted for `_completeness` and the argument this
+      whole row rests on. Under it this comp gets both 950 and 2.5.
+
+    ⚠ This test asserts only the part BOTH readings agree on: whatever is
+    published was observed, and nothing is invented. It deliberately does NOT
+    assert that both values survive — that would silently pick per-field
+    selection on QA's authority. **PM: this needs a ruling before the developer
+    guesses.** Unreachable on the committed pull (measured: only one chain
+    disagrees about any identity field at all), so the choice is free of
+    real-data consequences today and will not stay that way.
+    """
+    records = (
+        record("a", listed="2025-03-01", removed="2025-04-01", sqft=950.0, baths=None),
+        record("b", listed="2025-04-10", removed="2025-05-01", sqft=None, baths=2.5),
+    )
+    comp = one_comp(*records)
+    chain = chains_of(*records)[0]
+    for field in ("sqft", "baths"):
+        observed = {getattr(spell, field) for spell in chain}
+        assert getattr(comp, field) in observed, (
+            f"comp.{field}={getattr(comp, field)!r} was reported by no spell in this chain "
+            f"(observed {sorted(observed, key=repr)})"
+        )
+    assert (comp.sqft, comp.baths) != (None, None), (
+        "both observations reported something and the comp published neither — a tie on "
+        "completeness must not resolve to the emptiest possible comp"
+    )
+
+
+def test_a_tie_on_completeness_resolves_the_same_way_every_time() -> None:
+    """The half of the fork above that is NOT a ruling: whichever way a tie
+    breaks, it must break identically on every run and in every input order.
+
+    A completeness score is a coarse integer, so ties are common — far more
+    common than the conflicting-values case — and a tie broken by list position
+    is the same positional accident this row exists to remove, one level down.
+    """
+    records = [
+        record("a", listed="2025-03-01", removed="2025-04-01", sqft=950.0, baths=None),
+        record("b", listed="2025-04-10", removed="2025-05-01", sqft=None, baths=2.5),
+        record("c", listed="2025-05-05", removed="2025-06-01", sqft=None, baths=None),
+    ]
+    seen = set()
+    for order in permutations(records):
+        comp = one_comp(*order)
+        seen.add(tuple(repr(getattr(comp, field)) for field in IDENTITY_FIELDS))
+    assert len(seen) == 1, (
+        f"a completeness tie resolved {len(seen)} different ways depending on input order: "
+        f"{sorted(seen)}"
+    )
+
+
+def test_the_most_complete_observation_is_not_always_the_one_that_saw_the_removal() -> None:
+    """The interaction between this row's rule and `_completeness`'s ordering,
+    on a chain rather than on a single listing start.
+
+    `_completeness` deliberately ranks field completeness BELOW the removal
+    components, so that a rich still-active observation cannot beat one that saw
+    the unit leave the market. That ordering protects the collapse of two
+    observations of ONE listing start. This row's selector runs over a whole
+    CHAIN, where the two concerns are independent: the chain's end is already
+    fixed by `_chain_end`, so taking `sqft` from a still-open spell costs
+    nothing at all.
+
+    Asserted so a fix does not import `_completeness`'s ordering wholesale into
+    a place where its reason does not apply, and thereby refuse the only
+    reported square footage in the chain because it came from an open spell.
+    """
+    comp = one_comp(
+        record("closed", listed="2025-03-01", removed="2025-04-01", sqft=None, baths=None),
+        record("open", listed="2025-04-10", removed=None, sqft=880.0, baths=2.0),
+    )
+    assert comp.censored is True, (
+        "harness precondition: the chain ends on an open spell, so the comp is censored"
+    )
+    assert comp.sqft == 880.0, (
+        f"got sqft={comp.sqft}. The only observation that reported a square footage was the "
+        f"still-open one. Censoring is decided by dates and is already correct above; refusing "
+        f"its sqft buys nothing and discards the chain's only measurement."
+    )
+
+
+def test_a_chain_of_one_open_spell_reports_what_it_observed() -> None:
+    """The degenerate case, stated separately from
+    `test_a_single_spell_chain_is_untouched` because censoring is the branch a
+    selector is most likely to special-case by accident. 39 of the committed
+    pull's 567 comps are censored."""
+    comp = one_comp(record("solo", listed="2026-06-01", removed=None, sqft=615.0, baths=1.0))
+    assert comp.censored is True
+    assert comp.relist_count == 0
+    assert (comp.sqft, comp.baths) == (615.0, 1.0)
 
 
 # ===========================================================================

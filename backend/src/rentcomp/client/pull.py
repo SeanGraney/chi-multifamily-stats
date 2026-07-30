@@ -42,7 +42,14 @@ THE FOUR THINGS THIS MODULE IS RESPONSIBLE FOR
    skews every number computed from what came back. The check is live-path
    only — a fixture-mode pull spends nothing, so the cap has no claim on it,
    and refusing there would freeze the whole build at any month-end near the
-   cap.
+   cap. **It is counted in CALLS, not in windows** (`_owed_calls`): once a
+   resume can re-enter a window mid-way, one owed window can be two calls, and a
+   refusal computed per window refuses too late — the pull starts, spends what
+   the month cannot afford, and stops half-finished, which is the outcome this
+   paragraph exists to prevent. The same unit reaches the user, because
+   `Manifest.calls_to_complete` is what F3-S2's modal asks consent for and what
+   F4-S6 renders verbatim: quoting one call and sending two is money taken
+   without agreement, and it was measured doing exactly that.
 4. **Naming the gap.** A partial pull is usable (§5a: with a 50-call cap,
    refusing to show anything until the set is perfect would strand the user),
    so a per-query failure returns a partial `PullOutcome` rather than raising —
@@ -441,7 +448,9 @@ def _corroborate(status: QueryStatus, store: _StoredResponses) -> QueryStatus:
     return _demoted(status.label, status.sig, window)
 
 
-def _demoted(label: str, sig: str, window: _WindowState) -> QueryStatus:
+def _demoted(
+    label: str, sig: str, window: _WindowState, entry: _WindowState | None = None
+) -> QueryStatus:
     """An open window, priced by whether its missing evidence is gone or merely
     unreadable — the asymmetry `_corroborate` documents, stated once so the read
     path and `_reconcile` cannot drift apart about it.
@@ -453,7 +462,14 @@ def _demoted(label: str, sig: str, window: _WindowState) -> QueryStatus:
     the shape the gate fixture takes — and (c) on the likeliest cause, a schema
     change, spends a whole pull to recover bytes that were already fine. One file
     stopped the walk; that file is what the message names.
+
+    `entry` (defaulting to `window`) is what the record count is quoted from. The
+    two differ only under a REFRESH, where `window` counts just the pages this
+    run bought — so a message written off it would describe the run while the
+    reader takes it to describe the entry, and `/api/derive` would be shaping
+    comps from pages the message said were not there.
     """
+    entry = entry if entry is not None else window
     if window.next_offset is None:
         return QueryStatus(
             label=label,
@@ -462,7 +478,7 @@ def _demoted(label: str, sig: str, window: _WindowState) -> QueryStatus:
             owed=False,
             error=(
                 f"this window is holding {_blocked_name(window)}, which cannot be read as "
-                f"listings ({_evidence_count(window)}). It was paid for and re-fetching "
+                f"listings ({_evidence_count(entry)}). It was paid for and re-fetching "
                 "returns the same bytes, so no call is owed for it. If that one file is "
                 "damaged rather than the response — a directory or a locked file standing "
                 "where it belongs — clearing it is enough; every other page of this pull is "
@@ -477,7 +493,7 @@ def _demoted(label: str, sig: str, window: _WindowState) -> QueryStatus:
         owed_calls=window.calls_owed,
         error=(
             f"the evidence that answered this window is no longer complete on disk "
-            f"({_evidence_count(window)}), so the window is open again from offset "
+            f"({_evidence_count(entry)}), so the window is open again from offset "
             f"{window.next_offset} — {_call_count(window.calls_owed)} to finish it"
         ),
     )
@@ -648,7 +664,7 @@ def _verdict(
     if spent and isinstance(failure, ResponseUnusableError):
         return _unreadable_answer(query, base, entry, failure)
     if state.next_offset is None:
-        return _demoted(_label(query), base, entry if failure is None else state)
+        return _demoted(_label(query), base, state, entry)
     return _short(query, base, state, failure, entry=entry)
 
 
@@ -813,7 +829,7 @@ def _short(
             error=str(exc),
         )
     truncation = (
-        f"the response was truncated: {_evidence_count(state)}, so the window is open "
+        f"the response was truncated: {_evidence_count(entry)}, so the window is open "
         f"again from offset {state.next_offset} — "
         f"{_call_count(max(1, state.calls_owed))} to finish it"
     )
@@ -1146,6 +1162,10 @@ def _window_state(pages: dict[int, _StoredPage]) -> _WindowState:
     offset = 0
     fetched = 0
     page_size = 0
+    #: Records in the page the walk read LAST, which is what decides whether the
+    #: set ended (see the short-page clause below). Starts at 0 so a window whose
+    #: page 0 is absent does not read as "the last page was full".
+    last_records = 0
     total: int | None = None
     gaps: list[tuple[int, int]] = []
     blocked: _StoredPage | None = None
@@ -1162,9 +1182,17 @@ def _window_state(pages: dict[int, _StoredPage]) -> _WindowState:
                 continue
             if total is not None and offset < total:
                 gaps.append((offset, total))
-            elif total is None and page_size and page_size >= MAX_LIMIT:
-                # No total was ever recorded and the last page came back full, so
+            elif total is None and last_records >= MAX_LIMIT:
+                # No total was ever recorded and the LAST page came back full, so
                 # the client itself would have asked for one more (spec §3.2).
+                #
+                # ⚠ The last page, never the largest. Judged on `page_size` (the
+                # max, which the call arithmetic needs) a window whose first page
+                # was full and whose second was short read as "still going", and
+                # the walk then asked for a page past the end of the set on every
+                # iteration — measured 50 calls, offsets 500 through 596, i.e.
+                # the entire month. The client's rule is about the page it just
+                # received, and so is this one.
                 gaps.append((offset, offset + 1))
             break
         if page.records is None:
@@ -1178,6 +1206,7 @@ def _window_state(pages: dict[int, _StoredPage]) -> _WindowState:
             total = page.total_count
         fetched += page.records
         page_size = max(page_size, page.records)
+        last_records = page.records
         if page.records == 0 or (total is not None and offset + page.records >= total):
             # An empty page ends the set (the client's own defensive rule), and
             # so does reaching the total the window promised.

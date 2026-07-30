@@ -125,18 +125,22 @@ forever and break the honest case instead.
 
 from __future__ import annotations
 
+import stat
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 
 import httpx
 
 from rentcomp.client.planner import PlannedQuery, fetchable_queries, plan_pull_queries
 from rentcomp.client.rentcast import (
+    MAX_LIMIT,
     Mode,
     MissingApiKeyError,
     RentCastClient,
     RentCastError,
+    ResponseUnusableError,
     resolve_mode,
 )
 from rentcomp.storage.cache import (
@@ -334,11 +338,11 @@ def run_pull(
     if mode is Mode.LIVE:
         # Both halves of D17 and the whole of AC5, before a transport exists.
         _require_api_key()
-        spent_before = _require_budget(len(owed))
+        spent_before = _require_budget(_owed_calls(key, known, owed, force_refresh))
 
     for query in owed:
         status, arrived = _fetch_one(
-            key, query, today, transport, restart=force_refresh
+            key, query, today, transport, restart=force_refresh, mode=mode
         )
         known[_sig(query)] = status
         if arrived:
@@ -439,8 +443,17 @@ def _corroborate(status: QueryStatus, store: _StoredResponses) -> QueryStatus:
 
 def _demoted(label: str, sig: str, window: _WindowState) -> QueryStatus:
     """An open window, priced by whether its missing evidence is gone or merely
-    unreadable — the asymmetry `_corroborate` documents, stated once so the
-    read path and `_reconcile` cannot drift apart about it."""
+    unreadable — the asymmetry `_corroborate` documents, stated once so the read
+    path and `_reconcile` cannot drift apart about it.
+
+    **The advice in the unreadable message is the fix for a message that could
+    not be followed.** It used to say "delete this cache entry and search
+    again", which (a) named no path and is something no code in `backend/src`
+    does, (b) destroys every other page in the entry — 500 readable records in
+    the shape the gate fixture takes — and (c) on the likeliest cause, a schema
+    change, spends a whole pull to recover bytes that were already fine. One file
+    stopped the walk; that file is what the message names.
+    """
     if window.next_offset is None:
         return QueryStatus(
             label=label,
@@ -448,28 +461,60 @@ def _demoted(label: str, sig: str, window: _WindowState) -> QueryStatus:
             satisfied=False,
             owed=False,
             error=(
-                "this window holds a response on disk that cannot be read as listings "
-                f"({_evidence_count(window)}). It was paid for and re-fetching returns the "
-                "same bytes, so no call is owed for it. If the file itself is damaged rather "
-                "than the response, delete this cache entry and search again."
+                f"this window is holding {_blocked_name(window)}, which cannot be read as "
+                f"listings ({_evidence_count(window)}). It was paid for and re-fetching "
+                "returns the same bytes, so no call is owed for it. If that one file is "
+                "damaged rather than the response — a directory or a locked file standing "
+                "where it belongs — clearing it is enough; every other page of this pull is "
+                "intact and is still being used."
             ),
         )
     return QueryStatus(
         label=label,
         sig=sig,
         satisfied=False,
+        owed=True,
+        owed_calls=window.calls_owed,
         error=(
             f"the evidence that answered this window is no longer complete on disk "
             f"({_evidence_count(window)}), so the window is open again from offset "
-            f"{window.next_offset}"
+            f"{window.next_offset} — {_call_count(window.calls_owed)} to finish it"
         ),
     )
 
 
+def _blocked_name(window: _WindowState) -> str:
+    """The single file that stopped the walk, by name — never a bare "a response".
+
+    Named rather than counted because the user's only useful action is against
+    one file, and the widened blast radius makes that concrete: satisfaction is
+    now per page, so a *transient* lock on page 2 of 3 (antivirus, OneDrive)
+    demotes a window that a page-agnostic rule left alone. Telling that user to
+    delete the entry would turn a lock that clears itself in seconds into real
+    data loss.
+    """
+    blocked = window.blocked
+    if blocked is None or blocked.path is None:  # pragma: no cover - defensive
+        return "a response this pull cannot read"
+    return f"`{blocked.path}`"
+
+
+def _call_count(calls: int) -> str:
+    return "1 call" if calls == 1 else f"{calls} calls"
+
+
 def _evidence_count(window: _WindowState) -> str:
-    """"2 of 6 records readable" — what the user is short, in records."""
+    """"4 of 6 records readable" — how much of this window's evidence survives.
+
+    Counted over **every** page, gaps included, because this is the number a user
+    sees and `/api/derive` shapes its comps from the same pile. Quoting the
+    walk's own `fetched` (which stops at whatever ended the walk) told the user
+    "2 of 6 readable" while the loader was shaping 4 — two different answers to
+    one question about one set of files, which is the failure NORTH_STAR puts
+    first.
+    """
     promised = window.total_count if window.total_count is not None else "an unknown number of"
-    return f"{window.fetched} of {promised} records readable"
+    return f"{window.readable} of {promised} records readable"
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +529,7 @@ def _fetch_one(
     transport: httpx.BaseTransport | None,
     *,
     restart: bool,
+    mode: Mode,
 ) -> tuple[QueryStatus, bool]:
     """Fetch what one planned window is missing, one PAGE at a time.
 
@@ -512,36 +558,59 @@ def _fetch_one(
             else — "go buy it again" rather than "finish what I paid for". The
             old pages are overwritten per call and never deleted, so a refresh
             that fails part way still leaves the evidence it was replacing.
+        mode: which mode this pull resolved to, passed in rather than re-read so
+            one pull cannot change its mind halfway. It answers exactly one
+            question: **was a call billed for this attempt?** In fixture mode
+            none ever is, and that is what separates "we are holding an answer we
+            cannot use" (not owed) from "the saved response is unreadable and
+            nothing was filed" (owed) — see `_verdict`.
     """
     base = _sig(query)
     bought: set[int] = set()
     attempted: set[int] = set()
 
-    def window() -> _WindowState:
-        return _window_state(_held_pages(key, base, only=bought if restart else None))
+    def window(*, this_run_only: bool) -> _WindowState:
+        only = bought if (restart and this_run_only) else None
+        return _window_state(_held_pages(key, base, only=only))
 
     while True:
-        state = window()
+        state = window(this_run_only=True)
         # Nothing left worth buying: the window is whole, or it is holding bytes
         # it cannot read (paid for, and a re-fetch returns the same ones), or it
         # is short of a page it has already asked for once in this run — asking
         # again here would be a purchase per iteration with no stopping
         # condition, which is the shape D24 treats as different in kind.
         if state.whole or state.next_offset is None or state.next_offset in attempted:
-            return _verdict(query, base, state, None), bool(bought)
+            return _verdict(query, base, state, None, spent=False, entry=window(this_run_only=False)), bool(bought)
         attempted.add(state.next_offset)
 
         landed, failure = _fetch_page(key, base, query, state.next_offset, today, transport)
         bought |= landed
         if failure is not None:
-            # Re-read before judging: a `ResponseUnusableError` files its bytes
-            # on the way past, so what this window now holds is a fact about
-            # disk, not about the exception.
-            return _verdict(query, base, window(), failure), bool(bought)
+            # Re-read before judging: a response that could not be parsed is
+            # filed on the way past, so what this window now holds is a fact
+            # about disk rather than about the exception.
+            return (
+                _verdict(
+                    query,
+                    base,
+                    window(this_run_only=True),
+                    failure,
+                    spent=mode is Mode.LIVE,
+                    entry=window(this_run_only=False),
+                ),
+                bool(bought),
+            )
 
 
 def _verdict(
-    query: PlannedQuery, base: str, state: _WindowState, failure: Exception | None
+    query: PlannedQuery,
+    base: str,
+    state: _WindowState,
+    failure: Exception | None,
+    *,
+    spent: bool,
+    entry: _WindowState,
 ) -> QueryStatus:
     """One window's status, read off its page state.
 
@@ -549,16 +618,63 @@ def _verdict(
     go through, so the two cannot answer the same disk state two different ways —
     the drift class that failed F3-S4 (one rule for the fetch path, another for
     the read path) reappearing inside one function.
+
+    **A BILLED response this parser cannot read is never owed, whatever reached
+    the store.** Pricing that case off the store alone was wrong, and measurably
+    so: a 200 with a **zero-byte body** is refused by `write_raw_response`
+    (`if not raw: return None`), so nothing is filed, the store reports the page
+    absent, and the window was bought again on every attempt — measured
+    `[5, 1, 1]`, one call per attempt indefinitely. The store can only ever say
+    *absent*; only the exception says *absent because the server answered 200
+    with nothing and will answer the same way next time*, which is what
+    `ResponseUnusableError` exists to carry ("the one failure where the call
+    succeeded").
+
+    `spent` is what keeps that from over-reaching. In fixture mode the same
+    exception means an unreadable **saved** response with no call behind it and
+    nothing on disk, and F3-S4 pins that as owed — the not-owed answer is only
+    available *because* the money is already gone.
+
+    Args:
+        state: what this run may count (a REFRESH counts only its own pages).
+        entry: what the cache entry actually holds, used for messages only. A
+            refresh whose first page fails has an empty `state` while the entry
+            is full of pages `/api/derive` will happily shape, so a message
+            written off `state` would tell the user nothing is on disk while the
+            screen showed comps derived from it.
     """
     if state.whole:
         return QueryStatus(label=_label(query), sig=base, satisfied=True)
+    if spent and isinstance(failure, ResponseUnusableError):
+        return _unreadable_answer(query, base, entry, failure)
     if state.next_offset is None:
-        return (
-            _demoted(_label(query), base, state)
-            if failure is None
-            else _demoted_with(_label(query), base, state, failure)
-        )
-    return _short(query, base, state, failure)
+        return _demoted(_label(query), base, entry if failure is None else state)
+    return _short(query, base, state, failure, entry=entry)
+
+
+def _unreadable_answer(
+    query: PlannedQuery, base: str, entry: _WindowState, exc: Exception
+) -> QueryStatus:
+    """A 2xx that was billed and that this parser cannot read: missing, not owed.
+
+    Its own function rather than a branch of `_demoted` because only this path
+    knows *why* — a schema change and a damaged file need opposite actions from
+    the user — and because the response may have reached the store (an
+    unrecognised envelope) or not (a zero-byte body). The price is the same
+    either way: the money is gone and the next call returns the same answer.
+    """
+    return QueryStatus(
+        label=_label(query),
+        sig=base,
+        satisfied=False,
+        owed=False,
+        owed_calls=0,
+        error=(
+            f"the response arrived and could not be read: {exc}. The call was billed and "
+            "re-fetching returns the same answer, so no call is owed for it. This window's "
+            f"evidence is what it was: {_evidence_count(entry)}."
+        ),
+    )
 
 
 def _fetch_page(
@@ -664,47 +780,50 @@ def _held_pages(
 
 
 def _short(
-    query: PlannedQuery, base: str, state: _WindowState, exc: Exception | None
+    query: PlannedQuery,
+    base: str,
+    state: _WindowState,
+    exc: Exception | None,
+    *,
+    entry: _WindowState,
 ) -> QueryStatus:
-    """A window still owed a page, recorded with the reason §5a asks for.
+    """A window still owed pages, recorded with the reason §5a asks for and the
+    price §5a's resume will actually pay.
 
     The reason carries the exception's own message, so a 429 ("wait") and a 500
     ("retry") stay the different instructions they are — and the offset, so the
     record says which call would close the gap rather than only that one would.
+
+    `entry` rather than `state` decides whether "nothing of this window is on
+    disk" may be said, because the two differ exactly once: under a REFRESH,
+    `state` counts only the pages this run bought, so a refresh whose first page
+    failed has an empty `state` over an entry still full of pages that
+    `/api/derive` will shape into comps. Claiming nothing was on disk there is
+    a statement the screen contradicts.
     """
-    if state.fetched == 0 and not state.filed and exc is not None:
+    if not entry.filed and exc is not None:
         # Nothing of this window is on disk: the failure IS the whole story, and
         # dressing it up as a truncation would bury the reason.
-        return QueryStatus(label=_label(query), sig=base, satisfied=False, error=str(exc))
+        return QueryStatus(
+            label=_label(query),
+            sig=base,
+            satisfied=False,
+            owed=True,
+            owed_calls=max(1, state.calls_owed),
+            error=str(exc),
+        )
     truncation = (
         f"the response was truncated: {_evidence_count(state)}, so the window is open "
-        f"again from offset {state.next_offset}"
+        f"again from offset {state.next_offset} — "
+        f"{_call_count(max(1, state.calls_owed))} to finish it"
     )
     return QueryStatus(
         label=_label(query),
         sig=base,
         satisfied=False,
+        owed=True,
+        owed_calls=max(1, state.calls_owed),
         error=truncation if exc is None else f"{truncation} — the next page did not arrive: {exc}",
-    )
-
-
-def _demoted_with(
-    label: str, base: str, state: _WindowState, exc: Exception
-) -> QueryStatus:
-    """`_demoted`, with the failure that produced the unreadable page named.
-
-    The two are the same verdict from two directions — the read path finds bytes
-    it cannot use, the fetch path is told so by `ResponseUnusableError` — and
-    only the fetch path knows *why*, which is what a user needs to tell a schema
-    change from a damaged file.
-    """
-    demoted = _demoted(label, base, state)
-    return QueryStatus(
-        label=demoted.label,
-        sig=demoted.sig,
-        satisfied=False,
-        owed=False,
-        error=f"the response arrived and could not be read: {exc}. {demoted.error}",
     )
 
 
@@ -843,6 +962,9 @@ class _StoredPage:
     offset: int
     records: int | None
     total_count: int | None
+    #: Where this page lives, so a message about an unreadable one can name the
+    #: single file to clear instead of telling the user to delete the entry.
+    path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -852,16 +974,24 @@ class _WindowState:
     * `whole` — every page the evidence itself accounts for is on disk and
       readable. This is "satisfied", and it is a claim about pages, not about a
       signature having *something* under it.
-    * `next_offset` — the offset a resume must ask for, or `None` when no call
-      would deliver anything this pull does not already hold. This is the whole
-      of the money question: `None` prices the window at zero calls.
+    * `next_offset` — the offset a resume must ask for first, or `None` when no
+      call would deliver anything this pull does not already hold.
+    * `calls_owed` — how many calls finishing this window actually costs. **Not
+      derivable from `next_offset`**, and that gap was a real defect: a window
+      short of two pages quoted one call and spent two, which is money the user
+      never agreed to (`Manifest.calls_to_complete` is what F3-S2's modal asks
+      consent for and what F4-S6 renders verbatim).
     * `filed` — any response file at all under this window.
+    * `readable` — records readable across **every** page, gaps included. This
+      is the loader's number, and the one a user-facing message must quote:
+      `fetched` stops at whatever ended the walk, so quoting it told the user
+      "2 of 6 readable" while `/api/derive` was shaping 4 — two numbers for one
+      pile of evidence, which is NORTH_STAR's core failure mode.
 
-    The three combine into F3-S4's pricing, one level down: a page that is
-    **gone** is worth a call (`next_offset` names it); a page that is **there
-    and unreadable** is not (`next_offset is None`, `whole is False`), because
+    Together these are F3-S4's pricing, one level down: a page that is **gone**
+    is worth a call; a page that is **there and unreadable** is not, because
     re-fetching returns the same bytes and the loop would have no stopping
-    condition. Queue row 13g is the row that may revisit that asymmetry, by
+    condition. Queue row 13g is the row that may revisit that asymmetry by
     recording a digest at write time; until then both levels price it the same
     way, deliberately.
     """
@@ -869,8 +999,13 @@ class _WindowState:
     filed: bool
     whole: bool
     next_offset: int | None
+    calls_owed: int
     fetched: int
+    readable: int
     total_count: int | None
+    #: The page that stopped the walk, when one did — what `_demoted`'s message
+    #: names so the advice is "clear this file", never "delete this entry".
+    blocked: _StoredPage | None = None
 
 
 @dataclass(frozen=True)
@@ -890,81 +1025,178 @@ def _stored_responses(key: str) -> _StoredResponses:
     that is the one identifier both write paths agree on — see the module
     docstring on the sidecar's `sig`.
 
-    A **directory** standing where a response belongs is skipped rather than
-    counted as filed: no bytes were ever kept there, so the page is absent, not
-    unreadable, and a call really would deliver something this pull does not
-    have. (`storage/cache.py::_clear_directory_obstruction` treats an empty one
-    as the debris it is, so the recovery write succeeds.)
+    A path with **no bytes behind it** is skipped rather than counted as filed:
+    nothing was ever kept there, so the page is absent, not unreadable, and a
+    call really would deliver something this pull does not have. `_has_bytes`
+    draws that line — see it for why `is_dir()` alone cannot.
     """
     pages: dict[str, dict[int, _StoredPage]] = {}
     for path in raw_response_paths(key):
-        if path.is_dir():
+        if not _has_bytes(path):
             continue
         records = read_raw_records(path)
         meta = read_raw_meta(path)
         offset = _page_offset(meta, path.stem)
-        pages.setdefault(_query_sig_of(path.stem), {})[offset] = _StoredPage(
+        page = _StoredPage(
             offset=offset,
             records=None if records is None else len(records),
             total_count=_total_of(meta),
+            path=path,
         )
+        window = pages.setdefault(_query_sig_of(path.stem), {})
+        held = window.get(offset)
+        # Two files claiming one offset can only happen for files this module did
+        # not write, and the readable one must win: letting a garbage-keyed file
+        # overwrite a real page would open a gap where the bytes are intact and
+        # buy them again — the double-pay `_reconcile` exists to prevent.
+        if held is None or (held.records is None and page.records is not None):
+            window[offset] = page
     return _StoredResponses(pages=pages)
 
 
+def _has_bytes(path: Path) -> bool:
+    """Is there a response body at this path — anything at all a parse could try?
+
+    **`is_dir()` is not this question, and using it as though it were left two
+    holes.** A dangling symlink and a path whose `stat` fails both make
+    `is_dir()` return `False` (it swallows `OSError`), so both were read as
+    "a response is filed here and cannot be parsed" — missing, and never owed —
+    when in fact no byte was ever kept and a call would deliver something new.
+
+    So the question is asked of `stat` directly, and each answer priced by
+    whether a re-fetch can land:
+
+    * a regular file (empty or not) — bytes are filed here. Whether they parse
+      is `read_raw_records`' business; either way they were paid for.
+    * an **empty** directory — debris, and `storage/cache.py::_clear_directory_
+      obstruction` will `rmdir` it, so the recovery write succeeds and the window
+      settles. Absent, and owed.
+    * a **NON-empty** directory — the writer refuses to touch it by design ("a
+      non-empty one is something this code has no business deleting"), so a call
+      can never land there. Treated as filed-and-unreadable, which prices it at
+      zero: measured as owed, it was bought once per attempt with no stopping
+      condition, which is the shape that empties a 50-call month.
+    * anything `stat` cannot answer for — no bytes we can vouch for, and
+      `os.replace` will almost always land, so absent and owed.
+    """
+    try:
+        entry = path.stat()
+    except OSError:
+        return False
+    if not stat.S_ISDIR(entry.st_mode):
+        return True
+    try:
+        return any(path.iterdir())
+    except OSError:
+        # A directory we cannot even list is one the writer certainly cannot
+        # clear, so it is an obstruction rather than debris.
+        return True
+
+
 def _window_state(pages: dict[int, _StoredPage]) -> _WindowState:
-    """Walk a window's pages the way the client paginated them.
+    """Walk a window's pages the way the client paginated them, and price the
+    gaps.
 
     The same arithmetic `client/rentcast.py::_fetch_live` uses to decide it has
-    the whole set — start at 0, advance by the records each page actually
-    carried, stop on a known total or on a short/empty page — run backwards over
-    what is on disk. Sharing the rule is the point: a walk that computed
-    "whole" differently from the loop that fetched it would re-open a window
-    that really is complete, on every attempt, without bound.
+    the whole set, run backwards over what is on disk: start at 0, advance by
+    the records each page actually carried, and stop on a recorded total, on an
+    empty page, or on a page **shorter than `MAX_LIMIT`** when no total was ever
+    recorded. Sharing the rule is the point — a walk that computed "whole"
+    differently from the loop that fetched it would either re-open a complete
+    window on every attempt or, worse, call an incomplete one whole.
 
-    **A gap is owed only when something on disk says more records exist** —
-    either a recorded `total_count` above what is readable, or a page filed at a
-    *higher* offset than the gap (which cannot exist without the pages before
-    it). Without that guard an ordinary single-page window would look like page
-    0 of a longer set and be bought again forever; with it, the code invents no
-    purchase it cannot justify from the evidence.
+    ⚠ **That last clause is load-bearing and was missing.** Measured without it:
+    500 records at offset 0 and no `X-Total-Count` read as a whole window, so a
+    pull holding 500 of 503 reported `complete=True, missing=(), calls_to_
+    complete=0` — this row's own defect, relocated and worse, because there was
+    not even a `missing` entry to act on. `MAX_LIMIT` is the right constant and
+    not a guess: `client/query.py::build_listing_params` sends `limit=MAX_LIMIT`
+    on every request this product makes, and `_fetch_live` caps it there, so a
+    page of exactly that size is exactly the case where the client itself would
+    have asked for another.
+
+    **A gap is priced only when something on disk says more records exist** — a
+    recorded total above the position reached, or a page filed at a *higher*
+    offset (which cannot exist without the pages before it). Without that guard
+    an ordinary single-page window would look like page 0 of a longer set and be
+    bought again forever; with it, the walk invents no purchase it cannot
+    justify from the evidence.
+
+    **The walk does not stop at the first gap, because the price depends on
+    what lies beyond it.** A window missing its middle page holds the pages on
+    both sides, so exactly one call finishes it; a walk that stopped at the gap
+    would price the whole remainder (two calls where one page was lost, on a
+    50-call month). Each gap is measured against the next page actually held,
+    and converted to calls at the largest page size this window has been seen to
+    return — RentCast pages are uniform except the last.
     """
+    readable = sum(page.records for page in pages.values() if page.records is not None)
     if not pages:
         return _WindowState(
-            filed=False, whole=False, next_offset=0, fetched=0, total_count=None
+            filed=False,
+            whole=False,
+            next_offset=0,
+            calls_owed=1,
+            fetched=0,
+            readable=0,
+            total_count=None,
         )
 
+    above = sorted(pages)
     offset = 0
     fetched = 0
+    page_size = 0
     total: int | None = None
+    gaps: list[tuple[int, int]] = []
+    blocked: _StoredPage | None = None
+
     while True:
         page = pages.get(offset)
         if page is None:
-            more = (total is not None and fetched < total) or any(
-                held > offset for held in pages
-            )
-            return _WindowState(
-                filed=True,
-                whole=not more,
-                next_offset=offset if more else None,
-                fetched=fetched,
-                total_count=total,
-            )
+            beyond = next((held for held in above if held > offset), None)
+            if beyond is not None:
+                # A page sits above this hole, so the hole is real evidence that
+                # is gone — and it is bounded by the page that follows it.
+                gaps.append((offset, beyond))
+                offset = beyond
+                continue
+            if total is not None and offset < total:
+                gaps.append((offset, total))
+            elif total is None and page_size and page_size >= MAX_LIMIT:
+                # No total was ever recorded and the last page came back full, so
+                # the client itself would have asked for one more (spec §3.2).
+                gaps.append((offset, offset + 1))
+            break
         if page.records is None:
             # Paid for, filed, and not evidence. Missing, and NOT owed: another
-            # call returns the same bytes (D24, and `_corroborate`'s rule).
-            return _WindowState(
-                filed=True, whole=False, next_offset=None, fetched=fetched, total_count=total
-            )
+            # call returns the same bytes (D24, and `_corroborate`'s rule). The
+            # walk cannot pass it either — its record span is unknown — so it
+            # stops here and names the file that stopped it.
+            blocked = page
+            break
         if page.total_count is not None:
             total = page.total_count
         fetched += page.records
-        if page.records == 0 or (total is not None and fetched >= total):
+        page_size = max(page_size, page.records)
+        if page.records == 0 or (total is not None and offset + page.records >= total):
             # An empty page ends the set (the client's own defensive rule), and
             # so does reaching the total the window promised.
-            return _WindowState(
-                filed=True, whole=True, next_offset=None, fetched=fetched, total_count=total
-            )
+            break
         offset += page.records
+
+    owed = 0 if blocked is not None else sum(
+        -(-(end - start) // (page_size or 1)) for start, end in gaps
+    )
+    return _WindowState(
+        filed=True,
+        whole=blocked is None and not gaps,
+        next_offset=gaps[0][0] if (gaps and blocked is None) else None,
+        calls_owed=owed,
+        fetched=fetched,
+        readable=readable,
+        total_count=total,
+        blocked=blocked,
+    )
 
 
 def _held_as_of(key: str, recorded: Manifest | None, today: date) -> date:
@@ -1007,6 +1239,40 @@ def _sidecar_as_of(meta: dict) -> date | None:
 def _is_owed(status: QueryStatus | None) -> bool:
     """Should completing this pull send a call for this window?"""
     return status is None or status.is_owed
+
+
+def _owed_calls(
+    key: str,
+    known: dict[str, QueryStatus],
+    owed: list[PlannedQuery],
+    force_refresh: bool,
+) -> int:
+    """What this run will actually SEND — the number the budget is refused on.
+
+    `len(owed)` was that number while a query and a call were the same unit, and
+    it stopped being true the moment a resume could re-enter a window mid-way:
+    measured on a window short of two pages, `_require_budget` was asked about 1
+    and `_fetch_one` then spent 2. AC5's promise is "refuse before sending
+    anything", and a refusal computed from the wrong unit refuses too late — the
+    pull starts, spends what the month cannot afford, and the mid-pull guard in
+    `client/rentcast.py` stops it half-finished, which is the "half a pull is
+    worse than none" this module's own item 3 is about.
+
+    A REFRESH is priced from the pages the entry holds rather than from what is
+    owed (nothing is, by definition — a refresh re-buys everything), because
+    those are the pages it is about to buy again. Never below 1 per window: a
+    window is only in this list because a call is going out for it.
+    """
+    store = _stored_responses(key) if force_refresh else None
+    total = 0
+    for query in owed:
+        sig = _sig(query)
+        if store is not None:
+            total += max(1, len(store.pages.get(sig) or {}))
+            continue
+        status = known.get(sig)
+        total += status.calls_to_complete if status is not None else 1
+    return total
 
 
 def _write_manifest(
@@ -1108,26 +1374,52 @@ def _label(query: PlannedQuery) -> str:
 
 
 def _offset_of(meta: dict) -> int:
-    try:
-        return int(meta.get("offset") or 0)
-    except (TypeError, ValueError):
-        return 0
+    """The offset the CLIENT just reported, for naming the file it landed in.
+
+    Strict, and 0 only as a last resort: this number picks the filename, so a
+    value read loosely could file a page on top of one already paid for. Nothing
+    the client emits is anything but a non-negative `int`.
+    """
+    offset = _strict_offset(meta.get("offset"))
+    return offset if offset is not None else 0
 
 
 def _page_offset(meta: dict, stem: str) -> int:
-    """Which page of its window a stored response is — the sidecar first, the
-    filename second.
+    """Which page of its window a stored response is — the FILENAME first, the
+    sidecar as fallback.
 
-    The sidecar's `offset` is reliable on BOTH write paths (unlike its `sig`,
-    see the module docstring), so it leads. The filename's own `-offNNN` suffix
-    is the fallback for a response filed before the sidecar carried the field,
-    or one hand-written by a fixture; the two cannot disagree for anything this
-    module wrote, because `_page_sig` formats that suffix from the same number.
+    **This ordering is the whole point and it used to be the other way round.**
+    The offset is the page index's key, so reading it loosely is how a corrupt
+    sidecar destroys a good index: measured with one sidecar's `offset` set to
+    `"not-a-number"`, the loose read swallowed the error, returned 0, collapsed
+    that page onto the real page 0, and the pull then demanded a call for a page
+    it was holding. The filename's `-offNNN` suffix is *derived* — `_page_sig`
+    wrote it — so it is the trustworthy half; the sidecar is upstream-adjacent
+    data and is read as strictly as `_total_of` reads the total beside it.
+
+    The fallback still earns its keep: `write_raw_response` can leave a response
+    whose sidecar never landed, and a file from another writer may carry no page
+    marker at all. Such a name maps to page 0, which is exactly right — it is the
+    whole of whatever it is.
     """
-    if isinstance(meta.get("offset"), (int, str)):
-        return _offset_of(meta)
     from_name = _page_offset_of(stem)
-    return from_name if from_name is not None else 0
+    if from_name is not None:
+        return from_name
+    from_sidecar = _strict_offset(meta.get("offset"))
+    return from_sidecar if from_sidecar is not None else 0
+
+
+def _strict_offset(value: object) -> int | None:
+    """A page offset out of untrusted data, or `None` when there isn't one.
+
+    `bool` is excluded explicitly (`isinstance(True, int)` is `True`, and `True`
+    would index a phantom page 1), as are negatives — a walk that starts at 0
+    can never reach them, so they would silently hide a page rather than
+    misplace it.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _page_offset_of(stem: str) -> int | None:

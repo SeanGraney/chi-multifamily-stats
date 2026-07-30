@@ -135,11 +135,34 @@ class QueryStatus:
     #: the user to consent to, so it may only ever count calls a resume would
     #: actually make.
     owed: bool | None = None
+    #: HOW MANY calls finishing this window costs. `None` means "not recorded",
+    #: and falls back to the rule every manifest written before queue row 13c
+    #: reads back as: one call per owed window.
+    #:
+    #: One call per window was true only while a query and a call were the same
+    #: unit. Once a window can span pages, a window short of two pages costs two
+    #: calls — and `calls_to_complete` is what F3-S2's modal asks the user to
+    #: consent to and what F4-S6 renders verbatim, so a quote of 1 against a spend
+    #: of 2 is money taken without agreement. Measured before this field existed:
+    #: quoted 1, sent offsets 2 and 4, spent 2.
+    owed_calls: int | None = None
 
     @property
     def is_owed(self) -> bool:
         """Whether completing this pull should send a call for this window."""
         return (not self.satisfied) if self.owed is None else self.owed
+
+    @property
+    def calls_to_complete(self) -> int:
+        """Calls a resume would actually send for this window — 0 when not owed.
+
+        Never allowed below 1 for an owed window: a window that owes something
+        and quotes nothing has no priced path back to its evidence, which is the
+        state that made the lost pages unreachable in the first place.
+        """
+        if not self.is_owed:
+            return 0
+        return self.owed_calls if self.owed_calls and self.owed_calls > 0 else 1
 
     def as_json(self) -> dict:
         return {
@@ -148,6 +171,7 @@ class QueryStatus:
             "satisfied": self.satisfied,
             "error": self.error,
             "owed": self.is_owed,
+            "owed_calls": self.calls_to_complete,
         }
 
 
@@ -190,8 +214,13 @@ class Manifest:
         is missing (its evidence is unusable) and is *not* owed (the bytes are
         already paid for and a second call returns the same ones). Quoting a
         call there would take money the resume then refuses to spend.
+
+        Not `sum(1 for owed)` either, which is the same mistake one unit down: a
+        window spanning pages can owe more than one call, and quoting one for it
+        under-charges the consent rather than the money — the spend happens
+        regardless (queue row 13c/13i).
         """
-        return sum(1 for q in self.queries if q.is_owed)
+        return sum(q.calls_to_complete for q in self.queries)
 
     @property
     def complete(self) -> bool:
@@ -287,6 +316,18 @@ def write_raw_response(key: str, sig: str, raw: bytes, *, meta: Mapping) -> Path
     Refuses a zero-byte body (`b""` — the same hazard as a 204 or a redirect
     page) and returns `None` without writing anything. A genuinely empty
     RESULT (`b"[]"`) is a real, paid-for answer and is written normally.
+
+    **A sidecar that cannot be written does not un-write the response.** The
+    return value is the caller's only signal that a paid-for body reached disk,
+    and `client/pull.py` moves the manifest's `as_of` on exactly that signal —
+    so raising here after the bytes had already landed reported "nothing
+    arrived" over a response that was sitting in `raw/`. Measured: 543 bytes on
+    disk, `as_of` frozen ten days behind `today`, and `effective_dom = as_of −
+    listed` therefore under-reporting vacancy for every censored comp in the
+    entry, while the pull said `complete=True`. The bytes are the paid-for thing
+    (D24); the sidecar is an index over them, and losing it degrades that page's
+    `total_count` to "not recorded" — which the walk treats as "no evidence more
+    exists" and never turns into a purchase.
     """
     if not raw:
         return None
@@ -297,7 +338,13 @@ def write_raw_response(key: str, sig: str, raw: bytes, *, meta: Mapping) -> Path
 
     meta_path = entry / "raw" / f"{safe_sig}.meta.json"
     meta_body = json.dumps(dict(meta), sort_keys=True, default=str).encode("utf-8")
-    _atomic_write_bytes(meta_path, meta_body)
+    try:
+        _atomic_write_bytes(meta_path, meta_body)
+    except OSError:
+        # Deliberately swallowed, and ONLY here: every alternative is worse than
+        # a degraded index. Re-raising loses the arrival signal (above);
+        # unlinking the response destroys a call the owner paid for.
+        pass
 
     return raw_path
 
@@ -357,6 +404,7 @@ def read_manifest(key: str) -> Manifest:
 
 def _query_status(payload: Mapping) -> QueryStatus:
     owed = payload.get("owed")
+    calls = payload.get("owed_calls")
     return QueryStatus(
         label=str(payload.get("label") or ""),
         sig=str(payload.get("sig") or ""),
@@ -366,6 +414,11 @@ def _query_status(payload: Mapping) -> QueryStatus:
         # "fall back to `not satisfied`", which is exactly what those entries
         # meant when they were written.
         owed=bool(owed) if isinstance(owed, bool) else None,
+        # Same reasoning one story on: absent in every manifest written before
+        # queue row 13c, where one call per owed window was the truth.
+        owed_calls=(
+            calls if isinstance(calls, int) and not isinstance(calls, bool) and calls >= 0 else None
+        ),
     )
 
 

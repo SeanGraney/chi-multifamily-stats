@@ -260,22 +260,73 @@ def test_the_page_index_groups_a_window_by_filename_not_by_the_sidecar_sig(home)
     assert store.window(SIG).whole is True
 
 
-def test_a_sidecar_with_no_offset_falls_back_to_the_filenames_page_marker(home) -> None:
-    """Responses filed by a hand-written fixture (and by any writer that predates
-    the sidecar carrying `offset`) still have to land at the right page.
+def test_the_page_offset_comes_from_the_filename_before_the_sidecar(home) -> None:
+    """The DERIVED half wins, and the untrusted half is only a fallback.
 
-    Both sources agree by construction for anything this module writes —
-    `_page_sig` formats the suffix from the same number the sidecar records — so
-    the fallback is about files this module did not write, and it must not park
-    every one of them at offset 0.
+    The offset is the page index's key, so a loose read of it does not misplace a
+    page — it destroys one. Measured with the ordering inverted and one sidecar's
+    `offset` set to `"not-a-number"`: the value collapsed to 0, overwrote the real
+    page 0 in the index, and the pull then demanded a call for a page it was
+    holding. `_page_sig` wrote the filename suffix, so that is the half this code
+    can vouch for.
     """
-    assert _page_offset({}, _page_sig(SIG, 2)) == 2
-    assert _page_offset({"sig": "irrelevant"}, _page_sig(SIG, 500)) == 500
-    # The sidecar leads when it has the field at all.
-    assert _page_offset({"offset": 4}, _page_sig(SIG, 2)) == 4
-    # A name from before the convention (or from another writer) is page 0, which
-    # is exactly right: it is the whole of whatever it is.
+    # Derived and trustworthy: the filename decides, even against a sidecar that
+    # disagrees.
+    assert _page_offset({"offset": 4}, _page_sig(SIG, 2)) == 2
+    assert _page_offset({}, _page_sig(SIG, 500)) == 500
+    # The fallback still earns its keep — F7's shape leaves a response whose
+    # sidecar never landed, and a file from another writer may carry no marker.
+    assert _page_offset({"offset": 6}, "some-other-writers-name") == 6
+    # A name from before the convention is page 0, which is exactly right: it is
+    # the whole of whatever it is.
     assert _page_offset({}, "fe9de5158f036802") == 0
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        pytest.param(True, id="a bool would index a phantom page 1"),
+        pytest.param("not-a-number", id="a string used to swallow its error and return 0"),
+        pytest.param(-5, id="a negative offset is unreachable from a walk that starts at 0"),
+        pytest.param(2.0, id="a float is not an offset"),
+        pytest.param(None, id="absent"),
+    ],
+)
+def test_a_hostile_sidecar_offset_never_displaces_a_page(home, hostile) -> None:
+    """A corrupt index must not cost a call while every byte is intact.
+
+    Read as strictly as `_total_of` reads the total beside it, and with a name to
+    fall back on, every one of these lands the page at 0 — which is where a file
+    with no readable page marker belongs — rather than at a phantom offset or on
+    top of a page that is already there.
+    """
+    assert _page_offset({"offset": hostile}, "a-name-with-no-page-marker") == 0
+    # And with a usable filename, the sidecar cannot move it at all.
+    assert _page_offset({"offset": hostile}, _page_sig(SIG, 2)) == 2
+
+
+def test_a_garbage_keyed_file_never_overwrites_a_readable_page(home) -> None:
+    """The collision guard, which is what makes the strict read a belt as well as
+    braces.
+
+    Two files claiming one offset can only happen for files this module did not
+    write. Whichever the directory scan reaches second, the **readable** one must
+    survive in the index: an unreadable file displacing a real page 0 opens a gap
+    where the bytes are intact, and the pull buys them again.
+    """
+    write_raw_response(
+        KEY, _page_sig(SIG, 0), json.dumps([{"id": "real"}]).encode("utf-8"), meta={"offset": 0}
+    )
+    # A second file that also resolves to page 0 (no page marker in its name) and
+    # holds nothing a parse can use.
+    write_raw_response(KEY, "aaa-not-a-page-name", b"{not json", meta={})
+
+    window = _stored_responses(KEY).pages
+
+    assert window[SIG][0].records == 1, (
+        "an unreadable file displaced the readable page it collided with, which opens a gap "
+        "over bytes that are on disk and buys them again"
+    )
 
 
 @pytest.mark.parametrize(

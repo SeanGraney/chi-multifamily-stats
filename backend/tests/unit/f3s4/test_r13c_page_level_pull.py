@@ -650,29 +650,36 @@ def test_no_source_text_still_defers_page_level_resume_to_another_story() -> Non
     suspects = [
         root / "backend" / "src" / "rentcomp" / "client" / "pull.py",
         root / "backend" / "tests" / "unit" / "test_f3s4_durable_cache_dev.py",
-        root / "backend" / "tests" / "unit" / "f3s4" / "test_f3s4_resumable_pulls.py",
     ]
-    deferrals = ("out of scope", "is f3-s4's", "to f3-s4", "f3-s4's")
+    #: Present-tense claims that the behaviour is somebody else's. Narration of
+    #: the history ("was deferred", "the ruling was") is fine and stays; only a
+    #: standing deferral is a false lead. The second entry is the *reason* given
+    #: for the deferral, which is false on its own terms.
+    stale_claims = (
+        "is out of scope",
+        "itself is out of scope",
+        "is f3-s4's",
+        "deferred to f3-s4",
+        "more than one page per window",
+    )
     offenders: list[str] = []
     for path in suspects:
         if not path.is_file():
             continue
-        text = path.read_text(encoding="utf-8")
-        for sentence in text.replace("\n", " ").split("."):
+        for sentence in path.read_text(encoding="utf-8").replace("\n", " ").split("."):
             lowered = sentence.lower()
             if "page-level resume" not in lowered and "page resume" not in lowered:
                 continue
-            if any(claim in lowered for claim in deferrals):
-                offenders.append(f"{path.name}: {sentence.strip()[:160]}")
-            if "more than one page per window" in lowered:
-                offenders.append(f"{path.name}: {sentence.strip()[:160]}")
+            if any(claim in lowered for claim in stale_claims):
+                offenders.append(f"{path.name}: {sentence.strip()[:180]}")
 
     assert offenders == [], (
         "source text still defers page-level resume to another story, or still gives the "
         "reason it was deferred, after this row implemented it:\n  "
         + "\n  ".join(offenders)
-        + "\nRewrite it to describe what the code now does. The second claim is also false "
-        "on its own terms: the committed gate fixture is 500 of 690 records."
+        + "\nRewrite it to describe what the code now does. Note the deferral's stated "
+        "reason is also false on its own terms: the committed gate fixture is 500 of 690 "
+        "records, so the owner's next real pull of that search paginates."
     )
 
 

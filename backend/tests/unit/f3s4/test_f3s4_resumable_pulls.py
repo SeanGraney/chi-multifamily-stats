@@ -501,27 +501,27 @@ def test_the_gap_and_its_reason_survive_the_process_that_made_it(
 
 
 # ===========================================================================
-# PAGE-LEVEL RESUME — scope confirmation requested from the PM
+# PAGE-LEVEL RESUME — the scope question was answered: it is QUEUE.md row 13c
 # ===========================================================================
 #
-# `client/pull.py`'s own docstring defers this here by name: "Page-level resume
-# (re-entering a truncated query at its last offset) is F3-S4's". It is not in
-# the five AC clauses, but it is a straightforward instance of the [INVARIANT]
-# the story states in its own words — "no double-pay" — and on the live path it
-# is a real call re-spent. Flagged rather than assumed: if the PM rules it out
-# of scope, this one test comes out and nothing else in the file changes.
+# This test was written `xfail(strict=False)` as a scope question, not a defect
+# claim: F3-S4's five AC clauses do not mention page-level resume, so the test
+# had to be allowed to pass (the developer implemented it) or fail (the PM ruled
+# it out) without either breaking the gate before the ruling existed.
+#
+# The ruling exists — it is out of F3-S4 and owns its own queue row, **13c** —
+# and that row is now in flight. So the marker is REMOVED rather than switched to
+# `strict=True`: an `xfail` of either strictness reports as *xfailed and exits 0*,
+# which is the false-green family this project has now been bitten by five times
+# (WORKFLOW.md §2), and a developer implementing 13c would see a green suite with
+# nothing in it to fix. A plain failing test is the correct red state for
+# behaviour a story in flight is required to deliver.
+#
+# The rest of row 13c's specs — the integrity half, which is the worse and newer
+# half — live in `test_r13c_page_level_pull.py` beside this file. This test stays
+# here, unduplicated, as the money half's first clause.
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "SCOPE QUESTION for the PM, not a defect claim. F4-S9's `client/pull.py` defers "
-        "page-level resume to F3-S4 by name; the story's five AC clauses do not mention it. "
-        "Non-strict on purpose: it is allowed to pass (the developer implemented it) and "
-        "allowed to fail (the PM ruled it out), and neither should break the gate before "
-        "the ruling."
-    ),
-)
 def test_a_query_interrupted_between_pages_does_not_re_buy_the_page_it_holds(
     live_env, no_sockets
 ) -> None:

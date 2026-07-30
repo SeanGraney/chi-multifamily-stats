@@ -249,15 +249,28 @@ test("AC1b: the years in the progress surface come from the plan, not from a clo
   await page.goto(baseUrl());
   await submitSearch(page, { ...NARROW, address: "3651 S Wood St, Chicago, IL 60609" });
 
-  const progress = page.getByTestId("pipeline-progress");
-  await expect(progress).toBeVisible({ timeout: 8_000 });
-  await expect(
-    progress,
-    "the progress surface does not name the cohort years the server planned (1999, 1998). " +
-      "Per-year progress that does not say which year is not per-year progress — and the " +
-      "years are the plan's, never the browser's arithmetic.",
-  ).toContainText("1999");
-  await expect(progress).toContainText("1998");
+  // Same fallback chain as AC1a, deliberately: this file's markup contract is
+  // QA-PROPOSED, so hard-pinning `pipeline-progress` here while AC1a accepts a
+  // text match would fail a developer who satisfied AC1a by another name.
+  await expect
+    .poll(async () => (await firstVisible(byTestIdOrText(page, ["pipeline-progress"], /pull|stitch|deriv/i))) !== null, {
+      timeout: 8_000,
+      message: "no progress surface appeared while POST /api/search was in flight",
+    })
+    .toBe(true);
+  const progress = (await firstVisible(
+    byTestIdOrText(page, ["pipeline-progress"], /pull|stitch|deriv/i),
+  ))!;
+  const text = await progress.innerText();
+  for (const year of ["1999", "1998"]) {
+    expect(
+      text,
+      `the progress surface does not name the cohort year ${year} that the server planned. ` +
+        "Per-year progress that does not say which year is not per-year progress — and the " +
+        "years are the plan's, never the browser's arithmetic (D5: the planner owns the " +
+        `New-Year wrap and the Feb-29 clamp). Saw: ${text}`,
+    ).toContain(year);
+  }
 });
 
 // ===========================================================================
@@ -513,6 +526,59 @@ test("AC5/AC7: the call count is the server's number, not the length of the miss
     "the banner shows 3 calls — the length of `missing`, computed in the view. The two " +
       "numbers are different facts and only the server knows the second one.",
   ).not.toMatch(/3 calls?\b/);
+});
+
+test("AC4/AC5: a partial pull that DID return comps never claims nothing came back", async ({
+  page,
+}) => {
+  /**
+   * A live defect on `main`, found by inspection and pinned here. `Home.tsx`'s
+   * `SearchOutcome` branches on `result.complete`, and inside the incomplete
+   * branch it prints BOTH the gap and:
+   *
+   *   "Nothing usable came back for these constraints. Try widening the
+   *    radius, the date window, or the property types..."
+   *
+   * But `SearchResult` carries no comp count — `complete` is about which
+   * *windows arrived*, not about whether the pull found anything. So a pull
+   * that is one window short and returned twelve perfectly good comps tells
+   * the user nothing came back, and sends them off widening a search that is
+   * working. "Incomplete" and "empty" are different states with opposite
+   * remedies (finish the pull for 1 call vs change a constraint and pay for a
+   * new one), and conflating them is exactly the honesty failure this story
+   * exists to close.
+   *
+   * The two states are separately reachable and separately asserted: this test
+   * owns incomplete-with-evidence, AC2a/AC2b own complete-with-nothing.
+   */
+  const calls = await stubApi(page, {
+    plan: PLAN,
+    search: SEARCH_PARTIAL,
+    derive: DERIVE_PARTIAL,
+    deriveOnlyRef: SEARCH_PARTIAL.pull_ref,
+  });
+  await page.goto(baseUrl());
+  await submitSearch(page, { ...NARROW, address: "3651 S Wood St, Chicago, IL 60609" });
+
+  expect(
+    DERIVE_PARTIAL.comps.length,
+    "this test needs a partial pull that DID return comps",
+  ).toBeGreaterThan(0);
+
+  const body = await page.locator("body").innerText();
+  expect(
+    body,
+    "a partial pull that returned " +
+      `${DERIVE_PARTIAL.comps.length} comps told the user "nothing usable came back". The ` +
+      "pull is short a window, not short of evidence — the remedy is the 1-call resume, not " +
+      `widening a search that is working. Saw: ${body.slice(0, 400)}`,
+  ).not.toMatch(/nothing usable came back/i);
+
+  await openWorkspace(page, calls, SEARCH_PARTIAL.pull_ref);
+  const after = await page.locator("body").innerText();
+  expect(after, "the same claim appears on the derived-state surface").not.toMatch(
+    /nothing usable came back/i,
+  );
 });
 
 test("AC5 control: a complete pull shows no gap banner", async ({ page }) => {

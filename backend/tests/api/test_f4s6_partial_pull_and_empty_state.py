@@ -158,16 +158,35 @@ def derive_body(pull_ref: str, **overrides: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def test_the_routes_this_file_needs_exist(app) -> None:
+    """Harness precondition, as a FAILING test rather than a skip guard.
+
+    WORKFLOW.md §2: "a skip that exits 0 is indistinguishable from a pass" —
+    the defect class that has recurred four times on this project. A `client`
+    fixture that called `pytest.skip` when the routes were missing would take
+    eight real assertions with it and still exit 0. This states the same
+    precondition in the only form that cannot be mistaken for success.
+
+    Both routes exist on `main` (F4-S9), so this is green today and only ever
+    goes red if one is removed or renamed — in which case one named failure is
+    exactly what should be reported.
+    """
+    missing = [
+        f"POST {path}" for path in (SEARCH_PATH, DERIVE_PATH) if not route_present(app, path)
+    ]
+    assert not missing, (
+        f"{', '.join(missing)} is not exposed by the app, so every test in this file is "
+        "asserting nothing. Fix the route, do not skip the file."
+    )
+
+
 @pytest.fixture
 def client(app, rentcomp_home):
-    """A ``TestClient``, or a legible skip while the routes are absent.
+    """A ``TestClient`` over the app under test.
 
-    Both routes already exist on ``main`` (F4-S9), so this skip should never
-    fire — it is here so that a *future* regression reads as one named failure
-    rather than as eight confusing ones.
+    No skip guard: `test_the_routes_this_file_needs_exist` above owns that
+    precondition and fails loudly instead.
     """
-    if not (route_present(app, SEARCH_PATH) and route_present(app, DERIVE_PATH)):
-        pytest.skip(f"POST {SEARCH_PATH} / {DERIVE_PATH} not available")
     from fastapi.testclient import TestClient
 
     return TestClient(app)

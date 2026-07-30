@@ -137,7 +137,6 @@ from rentcomp.client.rentcast import (
     MissingApiKeyError,
     RentCastClient,
     RentCastError,
-    ResponseUnusableError,
     resolve_mode,
 )
 from rentcomp.storage.cache import (
@@ -561,6 +560,16 @@ def _fetch_page(
     at once and deliberately: a `ResponseUnusableError` is raised *after* the
     sink has already filed the bytes, and an interruption between pages leaves
     the earlier ones paid for — D24 is unconditional about them.
+
+    **Every failure is returned untyped, and the price is read off the store
+    instead.** F3-S4 needed a typed catch here (`ResponseUnusableError` → filed,
+    so not owed; anything else → owed) because the fetch path was the only place
+    that knew which had happened. It is not any more: `_fetch_one` re-reads the
+    window's pages after every attempt, so "we are holding bytes we cannot use"
+    is answered by the same `records_from_raw` the loader uses, on the same
+    files, rather than by a second rule that could disagree with it (queue row
+    13e). The exception's *message* is still carried, because only it can say
+    whether a schema change or a damaged file is the reason.
     """
     landed: set[int] = set()
 

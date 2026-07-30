@@ -531,13 +531,34 @@ def test_the_comp_this_row_admits_is_the_pulls_most_extreme_psf(real_comps) -> N
         "the shape of the suspicion: three bedrooms and three bathrooms in 700 square feet"
     )
     others = [c.psf for c in real_comps if c.psf is not None and c is not comp]
-    assert max(others) == pytest.approx(4.176), (
-        f"the highest $/sqft among the other comps is {max(others)}; this file's escalation "
-        f"note quotes 4.18 and should be re-read if that moved"
-    )
     assert comp.psf > max(others), (
-        "the escalation as written says the admitted comp becomes the pull's most extreme "
-        "$/sqft — if that is no longer true, re-read the note in this file's docstring"
+        f"THE PROPERTY THIS TEST DEFENDS: the comp row 9b admits is the pull's most extreme "
+        f"$/sqft. It publishes {comp.psf}, and some other comp publishes {max(others)}. If that "
+        f"is no longer true, the escalation in this file's docstring is stale and the owner FYI "
+        f"it supports must be re-read before anyone relies on it."
+    )
+    # ⚠ TOLERANCE, CORRECTED 2026-07-30 (row 9b verify) — a defect in this test, not in the fix.
+    # This line previously read `pytest.approx(4.176)`. `pytest.approx` defaults to a RELATIVE
+    # tolerance of 1e-6, i.e. ±4.176e-06, while the true value is 4.1759530791788855 — off the
+    # 4-decimal literal by 4.69e-05, about 11x the tolerance. A rounded literal was written under
+    # a 6-significant-figure default. It had never executed because the assertion above it
+    # (`comp.psf is not None`) bailed first on the pre-fix source, so the row's own fix is what
+    # made it reachable; measured identical (4.1759530791788855) on BOTH source trees, so it is
+    # not caused by the fix.
+    #
+    # KEPT rather than deleted, because it defends something the ordering assertion above does
+    # NOT: the escalation is quantified as "$4.28 vs a prior max of $4.18", and a runner-up that
+    # crept to 4.27 would still satisfy `>` while making that characterisation wrong. The pin is
+    # a documentation-drift guard on the quoted figure and on the size of the gap.
+    # `abs=1e-3` is the tolerance the 4-decimal literal was always written at; the exact float
+    # literal would over-pin to bit level for no gain, since nothing here is sensitive to the
+    # last ulp and a legitimate float reassociation upstream should not fail this test.
+    assert max(others) == pytest.approx(4.176, abs=1e-3), (
+        f"the highest $/sqft among the OTHER comps is {max(others)}; this file's escalation note "
+        f"quotes a prior maximum of $4.18 and should be re-read if that moved"
+    )
+    assert round(max(others), 2) == 4.18, (
+        "the docstring's quoted figure, in the form it is quoted in"
     )
     assert comp.sqft_suspect is False, (
         "F5-S1's >30%-deviation flag is not built, so this comp enters unflagged. When F5-S1 "

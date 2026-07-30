@@ -42,14 +42,13 @@ THE FOUR THINGS THIS MODULE IS RESPONSIBLE FOR
    skews every number computed from what came back. The check is live-path
    only — a fixture-mode pull spends nothing, so the cap has no claim on it,
    and refusing there would freeze the whole build at any month-end near the
-   cap. **It is counted in CALLS, not in windows** (`_owed_calls`): once a
-   resume can re-enter a window mid-way, one owed window can be two calls, and a
-   refusal computed per window refuses too late — the pull starts, spends what
-   the month cannot afford, and stops half-finished, which is the outcome this
-   paragraph exists to prevent. The same unit reaches the user, because
-   `Manifest.calls_to_complete` is what F3-S2's modal asks consent for and what
-   F4-S6 renders verbatim: quoting one call and sending two is money taken
-   without agreement, and it was measured doing exactly that.
+   cap. ⚠ **It is counted in WINDOWS, and a window is no longer a call** — a
+   resume that re-enters a window mid-way can send more than one, so this refusal
+   and `Manifest.calls_to_complete` both under-count for a paginated window.
+   That is **queue row 13j**, split out on purpose: a first attempt at it here
+   introduced four defects of its own, and the number reaches the user (F3-S2's
+   modal asks consent for it, F4-S6 renders it) so it wants its own tests
+   first.
 4. **Naming the gap.** A partial pull is usable (§5a: with a 50-call cap,
    refusing to show anything until the set is perfect would strand the user),
    so a per-query failure returns a partial `PullOutcome` rather than raising —
@@ -345,7 +344,7 @@ def run_pull(
     if mode is Mode.LIVE:
         # Both halves of D17 and the whole of AC5, before a transport exists.
         _require_api_key()
-        spent_before = _require_budget(_owed_calls(key, known, owed, force_refresh))
+        spent_before = _require_budget(len(owed))
 
     for query in owed:
         status, arrived = _fetch_one(
@@ -485,21 +484,32 @@ def _demoted(
                 "intact and is still being used."
             ),
         )
-    # One value, read once: an owed window quoted at 0 has no priced path back to
-    # its evidence, and a message that disagreed with the field beside it would
-    # be the same lie in two places.
-    owed = max(1, window.calls_owed)
     return QueryStatus(
         label=label,
         sig=sig,
         satisfied=False,
         owed=True,
-        owed_calls=owed,
         error=(
             f"the evidence that answered this window is no longer complete on disk "
             f"({_evidence_count(entry)}), so the window is open again from offset "
-            f"{window.next_offset} — {_call_count(owed)} to finish it"
+            f"{window.next_offset}{_also_blocked(window)}"
         ),
+    )
+
+
+def _also_blocked(window: _WindowState) -> str:
+    """The second half of a window that is BOTH short a page and blocked by one.
+
+    A buyable gap and an unreadable page can coexist, and the buyable one now
+    wins `next_offset` (see the walk). Saying only "open again from offset 0"
+    would send a user to buy one page and leave them without the reason the
+    window still will not settle afterwards.
+    """
+    if window.blocked is None or window.blocked.path is None:
+        return ""
+    return (
+        f". Separately, `{window.blocked.path.name}` is on disk and cannot be read as "
+        "listings; that page was paid for and no call is owed for it"
     )
 
 
@@ -517,10 +527,6 @@ def _blocked_name(window: _WindowState) -> str:
     if blocked is None or blocked.path is None:  # pragma: no cover - defensive
         return "a response this pull cannot read"
     return f"`{blocked.path}`"
-
-
-def _call_count(calls: int) -> str:
-    return "1 call" if calls == 1 else f"{calls} calls"
 
 
 def _evidence_count(window: _WindowState) -> str:
@@ -688,7 +694,6 @@ def _unreadable_answer(
         sig=base,
         satisfied=False,
         owed=False,
-        owed_calls=0,
         error=(
             f"the response arrived and could not be read: {exc}. The call was billed and "
             "re-fetching returns the same answer, so no call is owed for it. This window's "
@@ -829,20 +834,17 @@ def _short(
             sig=base,
             satisfied=False,
             owed=True,
-            owed_calls=max(1, state.calls_owed),
             error=str(exc),
         )
     truncation = (
         f"the response was truncated: {_evidence_count(entry)}, so the window is open "
-        f"again from offset {state.next_offset} — "
-        f"{_call_count(max(1, state.calls_owed))} to finish it"
+        f"again from offset {state.next_offset}"
     )
     return QueryStatus(
         label=_label(query),
         sig=base,
         satisfied=False,
         owed=True,
-        owed_calls=max(1, state.calls_owed),
         error=truncation if exc is None else f"{truncation} — the next page did not arrive: {exc}",
     )
 
@@ -982,6 +984,11 @@ class _StoredPage:
     offset: int
     records: int | None
     total_count: int | None
+    #: Could this page's SIDECAR be read at all? `False` means `total_count` is
+    #: unknown rather than absent, and the two must never collapse — see
+    #: `_window_state`'s lost-total clause, which is the whole reason this field
+    #: exists.
+    indexed: bool = True
     #: Where this page lives, so a message about an unreadable one can name the
     #: single file to clear instead of telling the user to delete the entry.
     path: Path | None = None
@@ -996,12 +1003,10 @@ class _WindowState:
       signature having *something* under it.
     * `next_offset` — the offset a resume must ask for first, or `None` when no
       call would deliver anything this pull does not already hold.
-    * `calls_owed` — how many calls finishing this window actually costs. **Not
-      derivable from `next_offset`**, and that gap was a real defect: a window
-      short of two pages quoted one call and spent two, which is money the user
-      never agreed to (`Manifest.calls_to_complete` is what F3-S2's modal asks
-      consent for and what F4-S6 renders verbatim).
     * `filed` — any response file at all under this window.
+    * `lost_total` — a page on disk whose sidecar cannot be read, with no other
+      page able to supply the window's total. The state that makes "whole"
+      undecidable; see the walk.
     * `readable` — records readable across **every** page, gaps included. This
       is the loader's number, and the one a user-facing message must quote:
       `fetched` stops at whatever ended the walk, so quoting it told the user
@@ -1019,10 +1024,10 @@ class _WindowState:
     filed: bool
     whole: bool
     next_offset: int | None
-    calls_owed: int
     fetched: int
     readable: int
     total_count: int | None
+    lost_total: bool = False
     #: The page that stopped the walk, when one did — what `_demoted`'s message
     #: names so the advice is "clear this file", never "delete this entry".
     blocked: _StoredPage | None = None
@@ -1061,6 +1066,11 @@ def _stored_responses(key: str) -> _StoredResponses:
             offset=offset,
             records=None if records is None else len(records),
             total_count=_total_of(meta),
+            # `read_raw_meta` returns `{}` for a sidecar that is absent, corrupt
+            # or obstructed. Nothing this module writes is empty (`_meta` always
+            # adds `as_of`), so `{}` means "the index for this page is gone",
+            # which is a different fact from "the server reported no total".
+            indexed=bool(meta),
             path=path,
         )
         window = pages.setdefault(_query_sig_of(path.stem), {})
@@ -1135,12 +1145,45 @@ def _window_state(pages: dict[int, _StoredPage]) -> _WindowState:
     page of exactly that size is exactly the case where the client itself would
     have asked for another.
 
-    **A gap is priced only when something on disk says more records exist** — a
-    recorded total above the position reached, or a page filed at a *higher*
-    offset (which cannot exist without the pages before it). Without that guard
-    an ordinary single-page window would look like page 0 of a longer set and be
-    bought again forever; with it, the walk invents no purchase it cannot
-    justify from the evidence.
+    ⚠⚠ **"No total was reported" and "the total was reported and then lost" are
+    not the same state, and collapsing them was wrong in BOTH directions.** They
+    reach this walk as the same `total_count is None`, so the short-page test
+    above decided a question it had no standing to answer:
+
+    * a page **at** `MAX_LIMIT` with its total lost → the walk invented a gap and
+      asked for a page on nothing better than the page's length; and
+    * a page **short of** `MAX_LIMIT` with its total lost → the walk declared the
+      window **whole**. Measured: 250 records on disk, `X-Total-Count: 690` on the
+      wire, sidecar unreadable → `complete=True, missing=(), calls_to_complete=0`
+      with **440 paid-for records gone and no label naming them**. That is worse
+      than the defect this row exists to fix, which at least left `missing`
+      non-empty.
+
+    So `_StoredPage.indexed` records whether the sidecar could be read at all,
+    and a page whose sidecar is gone contributes `lost_total` rather than a
+    silent `None`. The rule that follows is the one both reviewers arrived at
+    independently: **only a total we can still account for may settle the
+    question.** If another page proved a total, use it (that is the common
+    recovery, and why an obstruction beside a multi-page window is harmless). If
+    none did, the window is not whole and the short-page test does not run —
+    neither direction of the old guess is available.
+
+    ⚠ **It is not specific to a failed write.** Corrupting a sidecar reproduces
+    the identical false-`whole`, so the fragility was the short-page heuristic
+    itself; `storage/cache.py`'s swallowed sidecar error only made an ordinary
+    `OSError` a silent trigger for it.
+
+    **A gap is otherwise recorded only when something on disk says more records
+    exist** — a recorded total above the position reached, or a page filed at a
+    *higher* offset (which cannot exist without the pages before it). Without
+    that guard an ordinary single-page window would look like page 0 of a longer
+    set and be bought again forever.
+
+    ⚠ **The short-page test uses `MAX_LIMIT` and the gap arithmetic does not; do
+    not "unify" them.** They are different questions: whether a page just
+    *received* was short is about that page, while a gap the client will *fill*
+    is filled at the limit this product sends. One constant serving both would
+    be wrong for one of them.
 
     **The walk does not stop at the first gap, because the price depends on
     what lies beyond it.** A window missing its middle page holds the pages on
@@ -1153,24 +1196,18 @@ def _window_state(pages: dict[int, _StoredPage]) -> _WindowState:
     readable = sum(page.records for page in pages.values() if page.records is not None)
     if not pages:
         return _WindowState(
-            filed=False,
-            whole=False,
-            next_offset=0,
-            calls_owed=1,
-            fetched=0,
-            readable=0,
-            total_count=None,
+            filed=False, whole=False, next_offset=0, fetched=0, readable=0, total_count=None
         )
 
     above = sorted(pages)
     offset = 0
     fetched = 0
-    page_size = 0
     #: Records in the page the walk read LAST, which is what decides whether the
-    #: set ended (see the short-page clause below). Starts at 0 so a window whose
-    #: page 0 is absent does not read as "the last page was full".
+    #: set ended (see the short-page clause). Starts at 0 so a window whose page 0
+    #: is absent does not read as "the last page was full".
     last_records = 0
     total: int | None = None
+    unindexed: list[_StoredPage] = []
     gaps: list[tuple[int, int]] = []
     blocked: _StoredPage | None = None
 
@@ -1184,50 +1221,64 @@ def _window_state(pages: dict[int, _StoredPage]) -> _WindowState:
                 gaps.append((offset, beyond))
                 offset = beyond
                 continue
-            if total is not None and offset < total:
-                gaps.append((offset, total))
-            elif total is None and last_records >= MAX_LIMIT:
-                # No total was ever recorded and the LAST page came back full, so
+            if total is not None:
+                if offset < total:
+                    gaps.append((offset, total))
+            elif unindexed:
+                # The window's total is UNKNOWN, not absent: a page is on disk
+                # whose sidecar cannot be read, and no other page proved a total
+                # either. See the clause in the docstring — the short-page test
+                # below may not be applied here, in either direction.
+                gaps.append((offset, offset + 1))
+            elif last_records >= MAX_LIMIT:
+                # No total was ever reported and the LAST page came back full, so
                 # the client itself would have asked for one more (spec §3.2).
                 #
-                # ⚠ The last page, never the largest. Judged on `page_size` (the
-                # max, which the call arithmetic needs) a window whose first page
-                # was full and whose second was short read as "still going", and
-                # the walk then asked for a page past the end of the set on every
-                # iteration — measured 50 calls, offsets 500 through 596, i.e.
-                # the entire month. The client's rule is about the page it just
-                # received, and so is this one.
+                # ⚠ The last page, never the largest. Judged on the maximum, a
+                # window whose first page was full and whose second was short read
+                # as "still going", and the walk asked for a page past the end of
+                # the set on every iteration — measured 50 calls, offsets 500
+                # through 596, i.e. the entire month.
                 gaps.append((offset, offset + 1))
             break
         if page.records is None:
-            # Paid for, filed, and not evidence. Missing, and NOT owed: another
-            # call returns the same bytes (D24, and `_corroborate`'s rule). The
-            # walk cannot pass it either — its record span is unknown — so it
-            # stops here and names the file that stopped it.
+            # Paid for, filed, and not evidence. The walk cannot pass it — its
+            # record span is unknown — so it stops here and names the file that
+            # stopped it. Its total is harvested FIRST: a blocked page's sidecar
+            # is usually intact and is often the only thing that knows how large
+            # the window is (measured otherwise as "2 of an unknown number of
+            # records readable" over two sidecars both recording 6).
+            if page.total_count is not None:
+                total = page.total_count
             blocked = page
             break
         if page.total_count is not None:
             total = page.total_count
+        elif not page.indexed:
+            unindexed.append(page)
         fetched += page.records
-        page_size = max(page_size, page.records)
         last_records = page.records
         if page.records == 0 or (total is not None and offset + page.records >= total):
-            # An empty page ends the set (the client's own defensive rule), and
-            # so does reaching the total the window promised.
+            # An empty page ends the set (the client's own defensive rule), and so
+            # does reaching the total the window promised.
             break
         offset += page.records
 
-    owed = 0 if blocked is not None else sum(
-        -(-(end - start) // (page_size or 1)) for start, end in gaps
-    )
     return _WindowState(
         filed=True,
         whole=blocked is None and not gaps,
-        next_offset=gaps[0][0] if (gaps and blocked is None) else None,
-        calls_owed=owed,
+        # ⚠ A blocked page does NOT annihilate the gaps below it. It used to:
+        # with page 0 deleted and page 1 emptied, `next_offset` came back `None`
+        # and page 0 — genuinely gone, genuinely buyable — became unreachable
+        # through the product, which is the exact outcome this row exists to
+        # eliminate. Worse, the trigger is transient (a OneDrive or antivirus
+        # lock on page 1), so whether the owner could recover paid-for evidence
+        # turned on a file lock.
+        next_offset=gaps[0][0] if gaps else None,
         fetched=fetched,
         readable=readable,
         total_count=total,
+        lost_total=total is None and bool(unindexed),
         blocked=blocked,
     )
 
@@ -1272,40 +1323,6 @@ def _sidecar_as_of(meta: dict) -> date | None:
 def _is_owed(status: QueryStatus | None) -> bool:
     """Should completing this pull send a call for this window?"""
     return status is None or status.is_owed
-
-
-def _owed_calls(
-    key: str,
-    known: dict[str, QueryStatus],
-    owed: list[PlannedQuery],
-    force_refresh: bool,
-) -> int:
-    """What this run will actually SEND — the number the budget is refused on.
-
-    `len(owed)` was that number while a query and a call were the same unit, and
-    it stopped being true the moment a resume could re-enter a window mid-way:
-    measured on a window short of two pages, `_require_budget` was asked about 1
-    and `_fetch_one` then spent 2. AC5's promise is "refuse before sending
-    anything", and a refusal computed from the wrong unit refuses too late — the
-    pull starts, spends what the month cannot afford, and the mid-pull guard in
-    `client/rentcast.py` stops it half-finished, which is the "half a pull is
-    worse than none" this module's own item 3 is about.
-
-    A REFRESH is priced from the pages the entry holds rather than from what is
-    owed (nothing is, by definition — a refresh re-buys everything), because
-    those are the pages it is about to buy again. Never below 1 per window: a
-    window is only in this list because a call is going out for it.
-    """
-    store = _stored_responses(key) if force_refresh else None
-    total = 0
-    for query in owed:
-        sig = _sig(query)
-        if store is not None:
-            total += max(1, len(store.pages.get(sig) or {}))
-            continue
-        status = known.get(sig)
-        total += status.calls_to_complete if status is not None else 1
-    return total
 
 
 def _write_manifest(

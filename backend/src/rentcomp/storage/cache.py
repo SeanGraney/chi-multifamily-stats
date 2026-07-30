@@ -135,34 +135,10 @@ class QueryStatus:
     #: the user to consent to, so it may only ever count calls a resume would
     #: actually make.
     owed: bool | None = None
-    #: HOW MANY calls finishing this window costs. `None` means "not recorded",
-    #: and falls back to the rule every manifest written before queue row 13c
-    #: reads back as: one call per owed window.
-    #:
-    #: One call per window was true only while a query and a call were the same
-    #: unit. Once a window can span pages, a window short of two pages costs two
-    #: calls — and `calls_to_complete` is what F3-S2's modal asks the user to
-    #: consent to and what F4-S6 renders verbatim, so a quote of 1 against a spend
-    #: of 2 is money taken without agreement. Measured before this field existed:
-    #: quoted 1, sent offsets 2 and 4, spent 2.
-    owed_calls: int | None = None
-
     @property
     def is_owed(self) -> bool:
         """Whether completing this pull should send a call for this window."""
         return (not self.satisfied) if self.owed is None else self.owed
-
-    @property
-    def calls_to_complete(self) -> int:
-        """Calls a resume would actually send for this window — 0 when not owed.
-
-        Never allowed below 1 for an owed window: a window that owes something
-        and quotes nothing has no priced path back to its evidence, which is the
-        state that made the lost pages unreachable in the first place.
-        """
-        if not self.is_owed:
-            return 0
-        return self.owed_calls if self.owed_calls and self.owed_calls > 0 else 1
 
     def as_json(self) -> dict:
         return {
@@ -171,7 +147,6 @@ class QueryStatus:
             "satisfied": self.satisfied,
             "error": self.error,
             "owed": self.is_owed,
-            "owed_calls": self.calls_to_complete,
         }
 
 
@@ -215,12 +190,14 @@ class Manifest:
         already paid for and a second call returns the same ones). Quoting a
         call there would take money the resume then refuses to spend.
 
-        Not `sum(1 for owed)` either, which is the same mistake one unit down: a
-        window spanning pages can owe more than one call, and quoting one for it
-        under-charges the consent rather than the money — the spend happens
-        regardless (queue row 13c/13i).
+        ⚠ One call per owed WINDOW, which is only true while a window and a call
+        are the same unit. A window that spans pages can owe more than one, and
+        closing that gap — here, in `_require_budget`, and in the walk that would
+        have to supply the number — is **queue row 13j**, deliberately split out
+        after a first attempt at it introduced four defects of its own. Do not
+        widen this property without that row's tests in front of you.
         """
-        return sum(q.calls_to_complete for q in self.queries)
+        return sum(1 for q in self.queries if q.is_owed)
 
     @property
     def complete(self) -> bool:
@@ -404,7 +381,6 @@ def read_manifest(key: str) -> Manifest:
 
 def _query_status(payload: Mapping) -> QueryStatus:
     owed = payload.get("owed")
-    calls = payload.get("owed_calls")
     return QueryStatus(
         label=str(payload.get("label") or ""),
         sig=str(payload.get("sig") or ""),
@@ -414,11 +390,6 @@ def _query_status(payload: Mapping) -> QueryStatus:
         # "fall back to `not satisfied`", which is exactly what those entries
         # meant when they were written.
         owed=bool(owed) if isinstance(owed, bool) else None,
-        # Same reasoning one story on: absent in every manifest written before
-        # queue row 13c, where one call per owed window was the truth.
-        owed_calls=(
-            calls if isinstance(calls, int) and not isinstance(calls, bool) and calls >= 0 else None
-        ),
     )
 
 

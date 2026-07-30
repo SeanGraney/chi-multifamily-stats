@@ -52,13 +52,8 @@ from rentcomp.client.pull import (
 from rentcomp.client.rentcast import MAX_LIMIT
 from rentcomp.storage.cache import read_manifest, write_manifest
 from rentcomp.storage.config import Config
-from rentcomp.storage.ledger import Ledger, current_month, load_ledger, save_ledger
+from rentcomp.storage.ledger import load_ledger
 from rentcomp.storage.pulls import load_shaped_pull
-
-#: How many pages of the spanning window `Interrupted` leaves unbought. Derived,
-#: so the arithmetic cannot drift from the harness's own constants.
-PAGES_OWED_AFTER_INTERRUPTION = (SPANNING_TOTAL - PAGE_SIZE) // PAGE_SIZE
-
 
 def _first_page_sig(offset: int) -> str:
     """The filename stem the spanning window's page at `offset` is filed under."""
@@ -66,73 +61,19 @@ def _first_page_sig(offset: int) -> str:
 
 
 # ===========================================================================
-# F1 — the consent quote and the spend are one number
+# F1 — the consent quote and the spend are one number: NOT HERE, row 13j's
 # ===========================================================================
-
-
-def test_the_quote_and_the_spend_are_one_number_when_a_window_spans_pages(
-    home, live_env, no_sockets
-) -> None:
-    """**The property A3's second assertion protects, stated so it can hold.**
-
-    `calls_to_complete` is what F3-S2's modal asks the user to consent to and
-    what F4-S6 renders verbatim, so a pull that quotes 1 and spends 2 has taken
-    money the user did not agree to. Measured before the fix: quoted 1, sent
-    offsets 2 and 4, spent 2.
-
-    Asserted as `quoted == sent` rather than as a literal, because the number is
-    a function of the harness (two pages of the spanning window are unbought
-    after the interruption) and the invariant is the equality.
-    """
-    first = run_pull(**SEARCH, today=TODAY, transport=Interrupted().transport)
-    quoted = first.calls_to_complete
-    assert quoted == PAGES_OWED_AFTER_INTERRUPTION, (
-        f"the pull quotes {quoted} call(s) to finish a window short of "
-        f"{PAGES_OWED_AFTER_INTERRUPTION} pages. One call per owed WINDOW was true only "
-        "while a window was a call."
-    )
-    load_shaped_pull.cache_clear()
-
-    market = Market()
-    second = run_pull(**SEARCH, today=TODAY, transport=market.transport)
-
-    assert market.calls == quoted, (
-        f"the pull quoted {quoted} call(s) and the resume spent {market.calls} "
-        f"({market.sent}). The number the user consents to and the number the resume spends "
-        "are one number (F2-S3's invariant, one granularity down)."
-    )
-    assert second.complete is True and second.calls_to_complete == 0
-    assert no_sockets == []
-
-
-def test_the_budget_is_refused_on_the_calls_a_resume_will_send_not_the_windows(
-    home, live_env, no_sockets
-) -> None:
-    """AC5 is "refuse *before sending anything*", and a refusal counted in the
-    wrong unit refuses too late.
-
-    With one call left in the month and a window short of two pages, the pull
-    must decline up front rather than start, spend the one call it has, and stop
-    half-finished — which is what item 3 of this module's docstring calls worse
-    than not starting.
-    """
-    from rentcomp.client.pull import InsufficientCallBudgetError
-
-    run_pull(**SEARCH, today=TODAY, transport=Interrupted().transport)
-    load_shaped_pull.cache_clear()
-    save_ledger(Ledger(month=current_month(), calls_this_month=49, history=()))
-
-    denied = Denied("the month cannot afford the pages this resume needs")
-    with pytest.raises(InsufficientCallBudgetError) as refused:
-        run_pull(**SEARCH, today=TODAY, transport=denied.transport)
-
-    assert refused.value.required == PAGES_OWED_AFTER_INTERRUPTION, (
-        f"the pull says it needs {refused.value.required} call(s) for a window short of "
-        f"{PAGES_OWED_AFTER_INTERRUPTION} pages"
-    )
-    assert denied.requests == [], "the refusal came after a request had already gone out"
-    assert no_sockets == []
-
+#
+# Two tests lived here — `quoted == sent` for a window spanning pages, and
+# `_require_budget` refusing on calls rather than windows. They are removed with
+# the machinery they exercised: pricing in calls is **queue row 13j**, QA-first,
+# after a first attempt at it inside this row introduced four defects of its own.
+#
+# `backend-reviewer` endorsed the DIRECTION (§5a/D24: price in calls now that a
+# window and a call have diverged), so 13j should keep it. The property worth
+# lifting is `quoted == sent` asserted WITHOUT also requiring a single call —
+# `test_the_calls_to_complete_a_pull_is_what_completing_it_actually_costs` pins it
+# already but every window in it answers in one call, so it cannot see this.
 
 # ===========================================================================
 # F2 — a full page with no X-Total-Count is not a whole window

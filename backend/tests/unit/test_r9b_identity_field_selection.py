@@ -83,6 +83,11 @@ FULL_YEAR = ("01-01", "12-31")
 
 ADDRESS = "10 Probe St"
 
+#: Several observations of ONE listing id — `_dedupe_by_id`'s documented case (a
+#: listing whose status flipped mid-pagination, or whose `history` restates it).
+#: Required wherever a chain's observations must disagree about `unit`.
+SHARED_ID = "one-listing"
+
 
 # ---------------------------------------------------------------------------
 # harness preconditions — FAILING, never skipping (WORKFLOW.md §2: "a skip that
@@ -742,6 +747,86 @@ def test_changing_which_observation_supplies_the_unit_does_not_move_the_comp_key
         f"the comp's key is {comp_key(comp.address, comp.unit)!r} but the same unit keys to "
         f"{expected!r} under its other reported spelling. Whichever display string wins, the "
         f"key must not move — a workspace's weights are stored against it (F13-S1)."
+    )
+
+
+def test_a_reported_unit_designator_is_not_discarded_because_a_later_observation_omitted_it() -> None:
+    """⚠ ADDED AT VERIFY (2026-07-30) — a SURVIVING MUTANT, measured not argued.
+
+    Mutating the shipped selector's `unit` clause back to `chain[-1].unit` and
+    running the whole suite produced **exactly the 3 documented Windows failures
+    and the baseline pass count** — i.e. nothing in 1799 tests noticed. The
+    field's rule was implemented and left entirely unpinned.
+
+    It survived because every existing case has a last spell that reports a
+    designator, so "most recent usable" and `chain[-1]` return the same string.
+    This is the one shape that separates them: the last observation omitted the
+    designator and an earlier one did not.
+
+    The behaviour asserted is the row's own rule applied to `unit` — a reported
+    value beats an absent one — so this pins what the implementation already
+    does. It is a `[DEFAULT]` (the PM has explicitly reserved the `unit` rule),
+    so a ruling that changes it changes THIS test, deliberately, instead of
+    sliding through green.
+    """
+    # One listing id, observed twice: `_group_key` is computed per id, so two
+    # DIFFERENT ids that disagree about the designator land in two groups and
+    # never share a chain at all — there would be nothing to select between.
+    comp = one_comp(
+        record(SHARED_ID, listed="2025-03-01", removed="2025-04-01", unit="Unit 2"),
+        record(SHARED_ID, listed="2025-04-10", removed="2025-05-01", unit=None),
+    )
+    assert comp.unit == "Unit 2", (
+        f"the comp published unit={comp.unit!r}. One of its own observations named this unit "
+        f"'Unit 2' and a later one simply did not mention a designator — which is not evidence "
+        f"that the unit has none."
+    )
+
+
+def test_the_unit_selector_is_not_purely_presentational_after_all() -> None:
+    """⚠⚠ A CORRECTION TO THIS ROW'S OWN FRAMING, for the PM's `unit` ruling.
+
+    Row 9b and `_select_unit`'s docstring both justify leaving the `unit` rule
+    open on the grounds that "`comp_key` normalises all spellings, so F13-S1 is
+    safe either way". **That is true for spelling variants and false for the
+    only case the selector actually changes anything in.**
+
+    `Unit 1R` / `# 1R` / `1r` all normalise to the same token, so choosing
+    between two *reported* spellings really is display-only — that is what
+    `test_changing_which_observation_supplies_the_unit_does_not_move_the_comp_key`
+    above covers, and it still holds. But `_select_unit` only ever departs from
+    `chain[-1]` when the last spell reported **no** designator, and `comp_key`
+    treats an absent designator as *distinct* from a present one ("the whole
+    building" is not "the building's apartment 2"). So in exactly the case the
+    rule fires, the key moves:
+
+        chain[-1] rule  ->  `10 probe st|`      (no designator)
+        shipped rule    ->  `10 probe st|2`
+
+    Both keys are defensible and the shipped one is arguably better — it is the
+    more specific address, and it is what the chain actually observed. The point
+    is that the choice is **not free**: it reaches F13-S1's curation key, so it
+    is a ruling with a consequence rather than a formatting preference.
+
+    Unreachable on the committed pull — measured at verify, `unit` is identical
+    on all 567 comps before and after this row — so nothing an owner has saved
+    can move today.
+    """
+    # One listing id, observed twice: `_group_key` is computed per id, so two
+    # DIFFERENT ids that disagree about the designator land in two groups and
+    # never share a chain at all — there would be nothing to select between.
+    comp = one_comp(
+        record(SHARED_ID, listed="2025-03-01", removed="2025-04-01", unit="Unit 2"),
+        record(SHARED_ID, listed="2025-04-10", removed="2025-05-01", unit=None),
+    )
+    assert comp_key(comp.address, comp.unit) == comp_key(ADDRESS, "Unit 2"), (
+        f"key={comp_key(comp.address, comp.unit)!r}. Whichever way the PM rules on the `unit` "
+        f"selector, record here that the ruling MOVES THE CURATION KEY in the absent-designator "
+        f"case — it is not the display-only choice the row's text describes."
+    )
+    assert comp_key(comp.address, comp.unit) != comp_key(ADDRESS, None), (
+        "the two candidate rules key this comp differently; if this ever stops being true, "
+        "`comp_key`'s treatment of an absent designator has changed and F13-S1 needs re-reading"
     )
 
 

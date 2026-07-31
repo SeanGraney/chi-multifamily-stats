@@ -67,6 +67,10 @@ def post_derive(request: DeriveRequest) -> DerivedState:
         pull_digest=pull.digest,
         config_digest=config_digest(config),
         partial_pull=_partial_pull(pull.ref),
+        # F4-S4's window-drop count, read at the edge for the same reason
+        # `as_of` is: it is a fact about how this evidence was assembled, and
+        # the comps the pipeline receives are exactly the ones the window kept.
+        dropped_outside_window=pull.dropped_outside_window,
     )
     return derive(request, context)
 

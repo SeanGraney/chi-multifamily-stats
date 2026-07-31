@@ -127,6 +127,13 @@ class DeriveContext:
     #: a file, and "which windows are missing" is not something it could
     #: recompute from the comps it was handed.
     partial_pull: PartialPullInfo | None = None
+    #: `ShapingSummary.dropped_outside_window` for this pull — chains the date
+    #: window discarded (F4-S4), carried through so F4-S6's empty state can say
+    #: which constraint bound. Like `partial_pull` it is a fact about *how this
+    #: evidence was assembled*, which the pipeline cannot recompute from the
+    #: comps it was handed: post-window comps carry no trace of the ones the
+    #: window removed. `None` for a pull with no shaping stage behind it.
+    dropped_outside_window: int | None = None
 
 
 def drift_band(drift_pct: float, sensitivity_pts: float) -> Band[float]:
@@ -208,7 +215,7 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
             strict=True,
         )
     ]
-    breakdown = _breakdown(comps, keys, psfs, years, states)
+    breakdown = _breakdown(comps, keys, psfs, years, states, ctx.dropped_outside_window)
 
     return DerivedState(
         comps=derived_comps,
@@ -301,6 +308,7 @@ def _breakdown(
     psfs: Sequence[float | None],
     years: Sequence[int],
     states: Sequence[str],
+    dropped_outside_window: int | None,
 ) -> Breakdown:
     """Counts and their evidence, from one pass over one set of labels.
 
@@ -356,6 +364,10 @@ def _breakdown(
         missing_sqft=len(by_count["missing_sqft"]),
         per_cohort=per_cohort,
         comp_keys=by_count,
+        # Passed straight through from the shaping stage, never recounted here:
+        # the comps this function sees are exactly the ones the window KEPT, so
+        # nothing in this scope could reconstruct what it dropped.
+        dropped_outside_window=dropped_outside_window,
     )
 
 

@@ -106,7 +106,13 @@ def post_search(request: SearchRequest) -> SearchResult:
 
     cache_status = "miss" if prior is None else ("hit" if prior.complete else "stale")
 
-    if prior is not None and not request.force_refresh:
+    # A `resume` joins `force_refresh` on the fetching side, and the two stay
+    # distinct all the way down: `run_pull(force_refresh=False)` reconciles the
+    # manifest against the store and sends only what is owed, which is exactly
+    # §5a's "a resume costs exactly the remainder". Passing `resume` through as
+    # `force_refresh` would look like the same button and re-buy every window
+    # (F4-S6 AC6).
+    if prior is not None and not request.force_refresh and not request.resume:
         outcome = prior
     else:
         try:

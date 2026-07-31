@@ -160,6 +160,25 @@ class SearchRequest(SearchParams):
     #: the field (same body) but can no more act on it than it can fetch.
     force_refresh: bool = False
 
+    #: F4-S6's resume action: **finish this pull, do not re-buy it.**
+    #:
+    #: A different consent from `force_refresh`, and a different field on
+    #: purpose. `force_refresh` is F3-S2's REFRESH — "go and buy this evidence
+    #: again" — and it explicitly discards the resume diff (`client/pull.py`:
+    #: `known = {} if force_refresh`), so a one-window gap billed through it
+    #: costs a whole re-pull. `resume` says "send only what this pull does not
+    #: already hold", which is what `run_pull` does by default and what §5a
+    #: promises ("a pull interrupted at 3/4 costs exactly 1 call to finish").
+    #:
+    #: Needed as a request field at all because `POST /api/search` otherwise
+    #: fetches only on a cache MISS: a partial entry answers `stale` and returns
+    #: what is on disk without spending, deliberately, so that reopening a
+    #: workspace is never a purchase. This is the user asking for the purchase.
+    #:
+    #: Like `force_refresh` it lives here and not on `SearchParams`: consent to
+    #: spend money is a property of one request, never of persisted state.
+    resume: bool = False
+
     def plan_args(self) -> dict:
         """This request in the planner's own argument names, whitespace trimmed.
 

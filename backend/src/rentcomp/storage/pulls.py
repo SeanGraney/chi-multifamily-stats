@@ -54,7 +54,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from rentcomp.models.domain import StitchedComp
-from rentcomp.pipeline.shape import shape_raw_pull
+from rentcomp.pipeline.shape import shape_raw_pull_with_summary
 from rentcomp.storage.cache import (
     CORRUPT_MANIFEST_ERRORS,
     CacheMissError,
@@ -122,6 +122,16 @@ class ShapedPull(BaseModel):
     #: changes, which is what makes it usable as part of a memo key.
     digest: str
     comps: tuple[StitchedComp, ...]
+    #: `ShapingSummary.dropped_outside_window` (F4-S4) — chains this pull paid
+    #: for whose stitched start fell outside the date window. Reaches the wire
+    #: as `Breakdown.dropped_outside_window`, where F4-S6's empty state uses it
+    #: to say which constraint bound.
+    #:
+    #: `None` for a pre-shaped synthetic pull, which has no window stage behind
+    #: it and therefore no honest count — deliberately not 0, because "we did
+    #: not measure" and "we measured zero" lead the empty state to opposite
+    #: conclusions about what the user should widen.
+    dropped_outside_window: int | None = None
 
 
 class _PullDocument(BaseModel):
@@ -333,9 +343,17 @@ def _load_ws1_real_pull(config: Config) -> ShapedPull:
 
     active = json.loads(active_raw)
     inactive = json.loads(inactive_raw)
-    comps = shape_raw_pull(active, inactive, config, _WS1_AS_OF, *_WS1_WINDOW)
+    comps, summary = shape_raw_pull_with_summary(
+        active, inactive, config, _WS1_AS_OF, *_WS1_WINDOW
+    )
     digest = sha256(active_raw + inactive_raw).hexdigest()
-    return ShapedPull(ref=WS1_REAL_PULL_REF, as_of=_WS1_AS_OF, digest=digest, comps=comps)
+    return ShapedPull(
+        ref=WS1_REAL_PULL_REF,
+        as_of=_WS1_AS_OF,
+        digest=digest,
+        comps=comps,
+        dropped_outside_window=summary.dropped_outside_window,
+    )
 
 
 #: `rentcomp.storage.cache.cache_key` only ever emits lowercase sha256 hex
@@ -396,9 +414,17 @@ def _load_cache_backed_pull(key: str, config: Config) -> ShapedPull:
         bucket = inactive if "inactive" in path.stem else active
         bucket.extend(records)
 
-    comps = shape_raw_pull(active, inactive, config, manifest.as_of, *manifest.window)
+    comps, summary = shape_raw_pull_with_summary(
+        active, inactive, config, manifest.as_of, *manifest.window
+    )
     digest = sha256(b"".join(raw_blobs)).hexdigest()
-    return ShapedPull(ref=key, as_of=manifest.as_of, digest=digest, comps=comps)
+    return ShapedPull(
+        ref=key,
+        as_of=manifest.as_of,
+        digest=digest,
+        comps=comps,
+        dropped_outside_window=summary.dropped_outside_window,
+    )
 
 
 #: The memo's controls, exposed on the public entry point so callers never

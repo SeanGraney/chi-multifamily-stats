@@ -415,6 +415,33 @@ class Breakdown(BaseModel):
     per_cohort: list[CohortCount]
     comp_keys: dict[str, list[str]]
 
+    #: Chains this pull bought and the **date window** then threw away —
+    #: F4-S4's `ShapingSummary.dropped_outside_window`, on the wire since F4-S6.
+    #:
+    #: WHY IT IS HERE AND WHAT IT IS NOT PART OF. `included + excluded +
+    #: filtered == pulled` is F7-S1's [INVARIANT] and is measured over
+    #: *post-window* comps; this number counts chains that never reached that
+    #: population, so it is deliberately outside that identity and must stay
+    #: outside it. It is reported beside the identity, not folded into it.
+    #:
+    #: WHY IT IS ON THE WIRE AT ALL. F4-S6's empty state has to "name the
+    #: binding constraint", and `pulled == 0` cannot: a search that the source
+    #: answered with nothing and a search whose every record fell outside the
+    #: date window are the same zero, and they ask the user for opposite
+    #: actions (widen the radius vs. widen the window). Spec §3.2 pads every
+    #: query ±90 days, so on the committed real pull a 16-day June window keeps
+    #: 28 chains and drops 539 — 95% of what the pull paid for is discarded
+    #: here by design, and a drop that leaves no trace makes "your market is
+    #: thin" and "your window is narrow" indistinguishable. (F4-S4's PM ruling
+    #: kept this off the wire; F4-S6 is the story that gave it a surface, which
+    #: is the condition that ruling was waiting on.)
+    #:
+    #: `None` — never 0 — when the pull was not shaped from raw records: a
+    #: pre-shaped synthetic fixture has no window stage behind it, so it has no
+    #: honest count to report. "We did not measure" and "we measured zero" are
+    #: different claims and the empty state branches on the difference.
+    dropped_outside_window: int | None = None
+
 
 class DerivedWarning(BaseModel):
     """Something the user must know about this derive.

@@ -37,7 +37,7 @@ import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import type { Page, Request, Route } from "@playwright/test";
+import { expect, type Page, type Request, type Route } from "@playwright/test";
 import { REPO_ROOT, NPM, NPM_NEEDS_SHELL } from "./local-server";
 
 const FRONTEND_DIR = path.join(REPO_ROOT, "frontend");
@@ -229,4 +229,50 @@ export async function stubApi(page: Page, stub: ApiStub): Promise<ApiCall[]> {
   });
 
   return calls;
+}
+
+/** `SearchValues` field name → the form control's `data-testid`. */
+const SEARCH_FIELD_TESTIDS: Record<string, string> = {
+  address: "search-address",
+  bedrooms: "search-bedrooms",
+  bathrooms: "search-bathrooms",
+  sqft: "search-sqft",
+  radius: "search-radius",
+  windowStart: "search-window-start",
+  windowEnd: "search-window-end",
+  yearsBack: "search-years-back",
+};
+
+/**
+ * Fill and submit the search form. Leaves the page wherever the app takes it.
+ *
+ * WHY THIS IS SHARED SUPPORT AND NOT A LOCAL HELPER
+ * --------------------------------------------------
+ * Since F4-S6 removed `const PULL_REF = "ws1-real"` from `Results.tsx`, running
+ * a search is **the only door into Results** — the view derives nothing until
+ * `App` has an `OpenPull`, and the one producer of one today is
+ * `SearchForm`'s `onSubmitted` (`pull.ts`, "the two doors"; F1-S1's recents row
+ * is the second and is not built). So every spec that wants a derived state on
+ * screen has to come through here, including specs on the *live-server*
+ * harness (`f6-s1-map.spec.ts`), which is why this lives in support rather than
+ * beside the stub it was first written next to. One way in, one place to fix it
+ * when F1-S1 adds the other.
+ *
+ * Waiting for `search-preview` is not cosmetic: the preview is debounced 400ms
+ * and the progress surface reads its cohort years off that same plan response,
+ * so submitting before it lands races the thing several specs then assert on.
+ */
+export async function submitSearch(
+  page: Page,
+  values: Record<string, string>,
+): Promise<void> {
+  await page.getByTestId("nav-home").click();
+  await page.getByTestId("nav-new-search").click();
+  await expect(page.getByTestId("search-form")).toBeVisible();
+  for (const [field, value] of Object.entries(values)) {
+    const testId = SEARCH_FIELD_TESTIDS[field];
+    if (testId) await page.getByTestId(testId).fill(value);
+  }
+  await expect(page.getByTestId("search-preview")).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId("search-submit").click();
 }

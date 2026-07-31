@@ -229,10 +229,33 @@ function rows(page: Page) {
   return page.locator("[data-testid='comp-row']");
 }
 
+/**
+ * ⚠ AMENDED BY F6-S1, and the amendment is a locator fix with no assertion
+ * touched. Every `expect` in this file is exactly as F5-S2's QA wrote it.
+ *
+ * The `.or()` fallback below is deliberately loose — "however the developer
+ * marked up a row, find it by its key" — and it was unambiguous when
+ * `data-comp-key` appeared on comp rows and nowhere else. F6-S1 puts a map at
+ * the TOP of Results, and its testid contract (written by F7-S1's QA, adopted
+ * verbatim by F6-S1's) carries the same `data-comp-key` on every pin:
+ *
+ *     [data-testid='map-pin'][data-comp-key="<key>"]
+ *
+ * So `[data-comp-key="K"]` now matches a pin AND a row, and `.first()` takes
+ * DOM order — the pin. The five failures that produced were not F5-S2
+ * regressing: `rowFor` was silently returning a map marker, which has no
+ * checkbox, no weight box and no contribution cell. Excluding the map's own
+ * markers keeps the fallback's intent ("any element addressable by this key")
+ * while restoring the thing it was always about: a ROW.
+ */
 function rowFor(page: Page, key: string) {
   return page
     .locator(`[data-testid='comp-row'][data-comp-key="${key}"]`)
-    .or(page.locator(`[data-comp-key="${key}"]`))
+    .or(
+      page.locator(
+        `[data-comp-key="${key}"]:not([data-testid='map-pin']):not([data-testid='map-unplaceable'])`,
+      ),
+    )
     .first();
 }
 

@@ -449,6 +449,15 @@ test("AC4: a partial pull still renders its evidence — usable, not blocked", a
 });
 
 test("AC5: the gap is named precisely — the window AND the call count", async ({ page }) => {
+  // EXPECTED RED — PM deferral, not a defect. Marked by the PM (not by QA or the
+  // developer) because it encodes a PM ruling; see queue rows 12a and 13j.
+  // The `calls_to_complete` RENDERING is deliberately not built: it is a cost
+  // promise made to the owner, and the quote-vs-spend defect behind it (row 13j)
+  // is still open. Rendering a call count we KNOW can be wrong is worse than
+  // rendering none. This is strict, so it flips to a hard red — "expected to
+  // fail, but passed" — the day that rendering lands, which is exactly when
+  // someone must come back and read this note.
+  test.fail(true, "calls_to_complete rendering deferred behind row 13j (PM ruling)");
   const calls = await stubApi(page, {
     plan: PLAN,
     search: SEARCH_PARTIAL,
@@ -491,6 +500,13 @@ test("AC5: the gap is named precisely — the window AND the call count", async 
 test("AC5/AC7: the call count is the server's number, not the length of the missing list", async ({
   page,
 }) => {
+  // EXPECTED RED — PM deferral, not a defect. Marked by the PM; see rows 12a/13j.
+  // Same deferral as the test above. ⚠ Note this test defends a DIFFERENT error
+  // than the one deferred for: it guards against the VIEW counting
+  // `missing.length` in TypeScript, while the deferral is about the SERVER's
+  // number not yet being trustworthy. Both are real, and this assertion must be
+  // restored — not deleted — when row 13j lands.
+  test.fail(true, "calls_to_complete rendering deferred behind row 13j (PM ruling)");
   // `missing` has 3 entries and `calls_to_complete` is 1 — a real manifest
   // state (a window holding a 2xx the parser cannot use is missing and not
   // owed; storage/cache.py::QueryStatus.owed), pinned at Layer 2 by

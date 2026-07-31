@@ -122,7 +122,7 @@ import net from "node:net";
 import path from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { REPO_ROOT, NPM, NPM_NEEDS_SHELL } from "./support/local-server";
-import { fixture, submitSearch } from "./support/static-ui";
+import { arriveWithAPullToOpen, submitSearch } from "./support/open-pull";
 
 const FRONTEND_DIR = path.join(REPO_ROOT, "frontend");
 const FRONTEND_DIST = path.join(FRONTEND_DIR, "dist");
@@ -145,67 +145,15 @@ const MAP_PACKAGES = ["leaflet", "react-leaflet"] as const;
  * ===========================================================================
  * This spec used to reach Results by navigating there. That worked only
  * because `Results.tsx` held `const PULL_REF = "ws1-real"` and derived it
- * unconditionally on mount — so *any* visit to Results derived a fixture,
- * whatever the user had searched. F4-S6 removed that constant, and Results now
- * derives nothing until `App` holds an `OpenPull` (`frontend/src/pull.ts`).
+ * unconditionally on mount. F4-S6 removed that constant, and Results now
+ * derives nothing until `App` holds an `OpenPull` — the seam working as built,
+ * not a regression. So this spec opens a pull the way the user does, through
+ * the search form.
  *
- * ⚠ THAT IS THE SEAM WORKING, NOT A REGRESSION IN EITHER STORY. Before it, the
- * owner could spend real API calls on a real address, open Results, and be
- * shown the analysis of a fixture with nothing on screen saying so. Nothing
- * here may weaken it: no default ref, no "derive on mount", no second door.
- * The only change below is **setup** — this spec now opens a pull the way the
- * user does, through the search form (`support/static-ui.ts::submitSearch`,
- * the same helper F4-S6's own specs use). Every assertion is untouched.
- *
- * WHY THE SEARCH RESPONSE IS STUBBED AND THE DERIVE IS NOT
- * --------------------------------------------------------
- * The map's assertions need a REAL derive: AC3 needs comps with genuine
- * coordinate spread, AC4 needs a payload that carries more than one `state`,
- * and AC7 needs the server to actually re-classify a comp when the user
- * unchecks it. A stubbed derive would make AC7 assert my own fixture back at
- * me. So `POST /api/derive` goes to the live server this file spawned, exactly
- * as before, and only `POST /api/search` is intercepted — because a real one
- * cannot answer here by design: `RENTCOMP_LIVE` is empty and the key is
- * deleted from the child env (D17), so a cache-miss search has nothing to
- * fetch and would mint a ref with no evidence behind it.
- *
- * The stub hands back the ONE ref this backend resolves offline:
- * `storage/pulls.py::WS1_REAL_PULL_REF`, which shapes the two committed T-S3
- * gate fixtures through the real record-shaping chain, independent of
- * `RENTCOMP_HOME`. The literal is written here and NOT in `frontend/src` —
- * `f4s6-derive-targets-the-users-pull.spec.ts` AC8d walks the source tree for
- * exactly this string and must keep finding nothing.
+ * The whole mechanism, and why the derive stays LIVE while only the search is
+ * stubbed, is documented once in `support/open-pull.ts`. Every assertion below
+ * is untouched: this was a change of door, not of expectations.
  */
-const WS1_REAL_PULL_REF = "ws1-real";
-
-/**
- * What `POST /api/search` answers. The wire shape is F4-S6's committed fixture
- * (re-validated against the Pydantic response models on every pytest run by
- * `test_f4s6_stub_payloads_match_the_wire.py`) with one field changed: the ref
- * this backend can actually derive. `complete: true` keeps the gap banner off
- * the screen — a partial-pull banner is F4-S6's subject, not this file's.
- */
-const SEARCH_OUTCOME = { ...fixture("search-complete.json"), pull_ref: WS1_REAL_PULL_REF };
-
-/**
- * A valid search to submit. Every value here is inert with respect to this
- * spec's assertions — `Results` still derives a hardcoded `SUBJECT` (disclosed
- * by F4-S6's developer as an open finding) and the comps come from the ref
- * above, not from these fields. They exist only to get past the form's inline
- * validation, so they are the ws1 fixture's own subject for coherence rather
- * than for effect. `01-01`–`12-31` matches the window `_load_ws1_real_pull`
- * reads the fixtures under.
- */
-const SEARCH_VALUES = {
-  address: "3651 S Wood St, Chicago, IL 60609",
-  bedrooms: "4",
-  bathrooms: "2",
-  sqft: "1200",
-  radius: "0.5",
-  windowStart: "01-01",
-  windowEnd: "12-31",
-  yearsBack: "2",
-};
 
 let serverProcess: ChildProcess | null = null;
 let rentcompHome: string | null = null;
@@ -443,29 +391,6 @@ async function renderedRowKeys(page: Page): Promise<string[]> {
 }
 
 /**
- * Answer `POST /api/search` with {@link SEARCH_OUTCOME}, and nothing else.
- *
- * Deliberately narrow. `POST /api/search/plan` is left to the live server —
- * it is structurally incapable of spending a call (`api/plan.py`), so the cost
- * preview the form waits for is the real planner's answer rather than a
- * fixture pretending to be one. And the predicate matches the search route
- * *exactly*: a `"**\/api/search"` glob would be a trap the day someone reads it
- * as also covering `/api/search/plan`.
- */
-async function stubTheSearch(page: Page): Promise<void> {
-  await page.route(
-    (url) => url.pathname === "/api/search",
-    async (route: Route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(SEARCH_OUTCOME),
-      });
-    },
-  );
-}
-
-/**
  * Open a pull and land on Results, then wait for its first derive.
  *
  * The navigation is the user's own: fill the search form, submit it, and let
@@ -476,12 +401,11 @@ async function stubTheSearch(page: Page): Promise<void> {
  * blame the map.
  */
 async function gotoResults(page: Page): Promise<any> {
-  await stubTheSearch(page);
-  await page.goto(baseUrl + "/");
+  await arriveWithAPullToOpen(page, baseUrl);
   const first = page.waitForResponse((r) => isDerive(r.url()) && r.request().method() === "POST", {
     timeout: 30_000,
   });
-  await submitSearch(page, SEARCH_VALUES);
+  await submitSearch(page);
   const response = await first;
   expect(response.status(), "the initial derive did not succeed").toBe(200);
   await expect(rows(page).first()).toBeVisible({ timeout: 20_000 });

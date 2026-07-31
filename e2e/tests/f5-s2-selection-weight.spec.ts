@@ -60,6 +60,7 @@ import net from "node:net";
 import path from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { REPO_ROOT, NPM, NPM_NEEDS_SHELL } from "./support/local-server";
+import { arriveWithAPullToOpen, submitSearch } from "./support/open-pull";
 
 const FRONTEND_DIR = path.join(REPO_ROOT, "frontend");
 const FRONTEND_DIST = path.join(FRONTEND_DIR, "dist");
@@ -286,17 +287,23 @@ function bulkButton(page: Page, which: "all" | "none") {
     .first();
 }
 
-/** Navigate to Results and wait for its first derive to come back. */
+/**
+ * Open a pull, land on Results, and wait for its first derive to come back.
+ *
+ * F4-S6 removed `Results.tsx`'s hardcoded `PULL_REF`, so navigating to Results
+ * no longer derives anything — a pull has to be opened first, through the
+ * search form, which is the user's own route in (F4 flow step 4). The derive
+ * itself is still the LIVE server's: F5-S2's whole subject is that the numbers
+ * on screen are the server's re-classification and not arithmetic done in the
+ * view, which a stubbed payload would assert back at itself. See
+ * `support/open-pull.ts`. Setup only — no assertion below changed.
+ */
 async function gotoResults(page: Page): Promise<any> {
+  await arriveWithAPullToOpen(page, BASE_URL);
   const first = page.waitForResponse((r) => isDerive(r.url()) && r.request().method() === "POST", {
     timeout: 20_000,
   });
-  await page.goto(BASE_URL + "/");
-  const link = page
-    .getByRole("link", { name: /results/i })
-    .or(page.getByRole("button", { name: /results/i }))
-    .or(page.locator("[data-testid='nav-results']"));
-  if (await link.count()) await link.first().click();
+  await submitSearch(page);
   const response = await first;
   expect(response.status(), "the initial derive did not succeed").toBe(200);
   await expect(rows(page).first()).toBeVisible({ timeout: 15_000 });

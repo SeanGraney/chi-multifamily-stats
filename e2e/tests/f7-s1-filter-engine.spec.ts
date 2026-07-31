@@ -109,6 +109,7 @@ import net from "node:net";
 import path from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { REPO_ROOT, NPM, NPM_NEEDS_SHELL } from "./support/local-server";
+import { arriveWithAPullToOpen, submitSearch } from "./support/open-pull";
 
 const FRONTEND_DIR = path.join(REPO_ROOT, "frontend");
 const FRONTEND_DIST = path.join(FRONTEND_DIR, "dist");
@@ -396,17 +397,26 @@ async function expandFilteredFooter(page: Page): Promise<void> {
   await toggle.click();
 }
 
-/** Navigate to Results and wait for its first derive. */
+/**
+ * Open a pull, land on Results, and wait for its first derive.
+ *
+ * F4-S6 removed `Results.tsx`'s hardcoded `PULL_REF`, so navigating to Results
+ * no longer derives anything — a pull has to be opened first, through the
+ * search form, which is the user's own route in (F4 flow step 4). The derive
+ * stays the LIVE server's: this file's entire subject is that list membership
+ * follows the server's `state` rather than a predicate recomputed in
+ * TypeScript, and a stubbed payload would be asserting that against itself.
+ * See `support/open-pull.ts`. Setup only — no assertion below changed.
+ *
+ * Still reaches Results by clicking through from Home, so the note at the
+ * no-sqft test about `reload()` landing back on Home holds unchanged.
+ */
 async function gotoResults(page: Page): Promise<any> {
+  await arriveWithAPullToOpen(page, baseUrl);
   const first = page.waitForResponse((r) => isDerive(r.url()) && r.request().method() === "POST", {
     timeout: 30_000,
   });
-  await page.goto(baseUrl + "/");
-  const link = page
-    .getByRole("link", { name: /results/i })
-    .or(page.getByRole("button", { name: /results/i }))
-    .or(page.locator("[data-testid='nav-results']"));
-  if (await link.count()) await link.first().click();
+  await submitSearch(page);
   const response = await first;
   expect(response.status(), "the initial derive did not succeed").toBe(200);
   await expect(rows(page).first()).toBeVisible({ timeout: 20_000 });

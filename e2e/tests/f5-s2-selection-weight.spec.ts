@@ -56,29 +56,69 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import net from "node:net";
 import path from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import {
-  REPO_ROOT,
-  VENV_RENTCOMP,
-  VENV_RENTCOMP_HINT,
-  NPM,
-  NPM_NEEDS_SHELL,
-} from "./support/local-server";
+import { REPO_ROOT, NPM, NPM_NEEDS_SHELL } from "./support/local-server";
 
 const FRONTEND_DIR = path.join(REPO_ROOT, "frontend");
 const FRONTEND_DIST = path.join(FRONTEND_DIR, "dist");
-const BASE_URL = "http://127.0.0.1:8000";
 
-test.describe.configure({ mode: "serial" });
+/** See WORKFLOW.md §2's third door — a worktree has no `.venv` of its own. */
+const VENV_DIR = process.env.RENTCOMP_VENV_DIR ?? path.join(REPO_ROOT, ".venv");
+const VENV_BIN = path.join(VENV_DIR, process.platform === "win32" ? "Scripts" : "bin");
+const VENV_PYTHON = path.join(VENV_BIN, process.platform === "win32" ? "python.exe" : "python");
 
+/** The source tree the server must import — `pip install -e .` points at MAIN. */
+const BACKEND_SRC = path.join(REPO_ROOT, "backend", "src");
+
+/**
+ * NO `mode: "serial"` — removed with the F7-S1 dispatch, on the same evidence
+ * WORKFLOW.md §2 now records. `playwright.config.ts` already pins
+ * `workers: 1, fullyParallel: false`, so serial mode added nothing except
+ * "stop after the first failure": F7-S1's QA measured the same red suite
+ * reporting `1 failed, 6 did not run` with it and `5 failed, 3 passed,
+ * 0 did not run` without. "Did not run" reads like a pass to anyone scanning
+ * exit codes, and it hides the shape of the failure set from the developer
+ * who has to fix it. Nothing below depends on a previous test: every one of
+ * them navigates fresh and `/api/derive` is stateless.
+ *
+ * The server harness has also moved to WORKFLOW.md §2's ratified pattern —
+ * `python -m uvicorn rentcomp.app:app` on an OS-chosen port instead of the
+ * `rentcomp` console script on a hardcoded 8000 — because the port-contention
+ * false green it prevents (another agent's build answering, spec reports
+ * green) is not something this spec could otherwise detect. Same ASGI object,
+ * so nothing about what is under test changes; D7's "one command launches it"
+ * is F0-S1b's AC and `f0-s1b-integration.spec.ts` still covers it.
+ */
 let serverProcess: ChildProcess | null = null;
 let rentcompHome: string | null = null;
 let setupFailure: string | null = null;
+let BASE_URL = "";
+let serverPort = 0;
+let serverLog = "";
+
+/** A port nothing is listening on right now, chosen by the OS. */
+async function freePort(): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (typeof address === "string" || address === null) {
+        probe.close(() => reject(new Error("could not resolve an ephemeral port")));
+        return;
+      }
+      const { port } = address;
+      probe.close(() => resolve(port));
+    });
+  });
+}
 
 async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (serverProcess && serverProcess.exitCode !== null) return false; // died on bind
     try {
       const res = await fetch(url);
       if (res.status < 500) return true;
@@ -90,13 +130,34 @@ async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
   return false;
 }
 
+/** "The server answering us is the one we started" (WORKFLOW.md §2). */
+function serverIdentityProblem(): string | null {
+  if (!serverProcess) return "no server process was ever spawned";
+  if (serverProcess.exitCode !== null) {
+    return (
+      `the server we spawned exited with code ${serverProcess.exitCode}, yet ${BASE_URL} ` +
+      "answered — every result in this run is about a DIFFERENT agent's build " +
+      `(WORKFLOW.md §2, port contention). Server output:\n${serverLog.slice(-800)}`
+    );
+  }
+  if (!serverLog.includes(`:${serverPort}`)) {
+    return (
+      `the server we spawned never announced port ${serverPort}. Output so far:\n` +
+      serverLog.slice(-800)
+    );
+  }
+  return null;
+}
+
 test.beforeAll(async () => {
-  if (!existsSync(FRONTEND_DIR)) {
-    setupFailure = "frontend/ does not exist";
+  if (!existsSync(VENV_PYTHON)) {
+    setupFailure =
+      `${VENV_PYTHON} not found — expected the repo-root .venv, or RENTCOMP_VENV_DIR ` +
+      "pointing at it when running from a worktree (WORKFLOW.md §2)";
     return;
   }
-  if (!existsSync(VENV_RENTCOMP)) {
-    setupFailure = `${VENV_RENTCOMP_HINT} not found — expected \`pip install -e backend/\``;
+  if (!existsSync(FRONTEND_DIR)) {
+    setupFailure = "frontend/ does not exist";
     return;
   }
   try {
@@ -111,16 +172,38 @@ test.beforeAll(async () => {
     return;
   }
 
+  serverPort = await freePort();
+  BASE_URL = `http://127.0.0.1:${serverPort}`;
   rentcompHome = mkdtempSync(path.join(tmpdir(), "rentcomp-f5s2-home-"));
-  serverProcess = spawn(VENV_RENTCOMP, [], {
-    cwd: REPO_ROOT,
-    env: { ...process.env, RENTCOMP_HOME: rentcompHome, RENTCOMP_LIVE: "" },
-    stdio: "pipe",
-  });
 
-  if (!(await waitForServer(`${BASE_URL}/openapi.json`, 20_000))) {
-    setupFailure = "rentcomp server did not come up within 20s";
+  const env = { ...process.env } as NodeJS.ProcessEnv;
+  delete env.RENTCAST_API_KEY; // D17: a live call must be impossible, not unlikely
+  env.RENTCOMP_LIVE = "";
+  env.RENTCOMP_HOME = rentcompHome;
+  env.RENTCOMP_UI_DIR = FRONTEND_DIST; // serve the build this spec just made
+  env.PYTHONPATH = [BACKEND_SRC, process.env.PYTHONPATH]
+    .filter(Boolean)
+    .join(path.delimiter); // ';' on Windows — WORKFLOW.md §2
+
+  serverProcess = spawn(
+    VENV_PYTHON,
+    ["-m", "uvicorn", "rentcomp.app:app", "--host", "127.0.0.1", "--port", String(serverPort)],
+    { cwd: REPO_ROOT, env, stdio: "pipe" },
+  );
+  serverProcess.stdout?.on("data", (chunk) => (serverLog += chunk.toString()));
+  serverProcess.stderr?.on("data", (chunk) => (serverLog += chunk.toString()));
+
+  if (!(await waitForServer(`${BASE_URL}/openapi.json`, 30_000))) {
+    setupFailure = `server did not come up on ${BASE_URL} within 30s. Output:\n${serverLog.slice(-800)}`;
   }
+});
+
+test("the harness stood up a server of our own, on a port nobody else holds", () => {
+  expect(setupFailure, setupFailure ?? "").toBeNull();
+  expect(
+    serverIdentityProblem(),
+    "the server this spec is about to test is not the one it started",
+  ).toBeNull();
 });
 
 test.afterAll(() => {
@@ -456,43 +539,48 @@ test.describe("F5-S2 — curation controls drive the derive", () => {
 
   test("AC2b: ALL/NONE leave filtered-out comps' weights untouched", async ({ page }) => {
     // ---------------------------------------------------------------------
-    // STRICT XFAIL — the pattern F4-S2's QA introduced on this project.
+    // The strict xfail that used to guard this test is GONE, and its own note
+    // is why: "Remove this marker when a filter control exists." F7-S1/F7-S2
+    // landed the filter strip, so from the moment that shipped Playwright
+    // would have reported "expected to fail, but passed" — a FAILURE at the
+    // regression gate. The marker did exactly the job it was written to do
+    // (the opposite decay curve from a comment), and this is the removal it
+    // was asking for. PM ruling, F7-S1 dispatch.
     //
-    // This clause of the AC ("ALL/NONE operate on currently VISIBLE
-    // (unfiltered) comps only") cannot be honestly driven today: the filter
-    // ENGINE exists server-side (`pipeline/membership.py`, F0-S2 scope) but
-    // there is no UI that can turn a filter on — that is F7-S1/F7-S2, both
-    // BLOCKED on this very story. With no filter reachable from the browser,
-    // nothing is ever invisible, and a test written now would pass by being
-    // vacuous.
+    // Two changes to the body it spelled out, both of which make it assert
+    // MORE than the sketch did, and both flagged to the PM rather than made
+    // quietly:
     //
-    // `test.fail()` rather than `test.skip()` on purpose: a skip decays
-    // silently and would still be sitting there in six weeks. This fails
-    // LOUDLY the day the gap closes — the moment a filter control renders and
-    // this test passes, Playwright reports "expected to fail, but passed",
-    // which forces whoever lands F7-S2 to delete this marker and confirm the
-    // assertion for real. The opposite decay curve from a note.
+    //   1. the filter click is now awaited through `deriveCausedBy`. As
+    //      written, the click and the NONE click landed inside one 150ms
+    //      debounce window, so they coalesced into a single request and the
+    //      view still held the pre-filter comp set when NONE swept it. The
+    //      test could not have passed under any implementation.
+    //   2. the comp checked is read off the response's own `state` labels
+    //      rather than being `comps[0]` by position. Position assumed the
+    //      first comp in the payload happens to be one the filter takes; the
+    //      server's label is the thing the AC is actually about.
     // ---------------------------------------------------------------------
-    test.fail(
-      true,
-      "F7-S1/F7-S2 (filter engine + filter strip) are not built, so no comp can be made " +
-        "invisible from the browser. Remove this marker when a filter control exists."
-    );
-
-    const initial = await gotoResults(page);
+    await gotoResults(page);
     const filterControl = page
       .locator("[data-testid='filter-strip']")
       .or(page.getByRole("button", { name: /filter/i }))
       .or(page.locator("[data-testid='filter-max-distance']"));
     expect(
       await filterControl.count(),
-      "no filter control is reachable — see the strict-xfail note above"
+      "no filter control is reachable from the browser — F7-S1/F7-S2 own the strip"
     ).toBeGreaterThan(0);
 
-    // The assertion this test will make once a filter exists, spelled out so
-    // the person removing the marker does not have to reinvent it:
-    await filterControl.first().click();
-    const filteredKeys: string[] = initial.comps.map((c: any) => c.key).slice(0, 1);
+    const filtered = await deriveCausedBy(page, () => filterControl.first().click());
+    const filteredKeys: string[] = filtered.payload.comps
+      .filter((c: any) => c.state === "filtered")
+      .map((c: any) => c.key)
+      .slice(0, 1);
+    expect(
+      filteredKeys.length,
+      "switching the filter control on took no comps at all, so this test would be vacuous"
+    ).toBe(1);
+
     const none = await deriveCausedBy(page, () => bulkButton(page, "none").click());
     for (const key of filteredKeys) {
       expect(

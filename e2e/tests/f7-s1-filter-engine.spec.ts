@@ -878,38 +878,28 @@ test.describe("F7-S1 — filters thin the view without deleting evidence", () =>
   });
 
   // -------------------------------------------------------------------------
-  // AC5 — rust on the map. STRICT XFAIL: F6-S1 does not exist.
+  // AC5 — rust on the map. LIVE as of F6-S1; the strict xfail is gone.
   // -------------------------------------------------------------------------
 
   test("a filtered comp keeps a pin on the map, in the filtered (rust) state", async ({ page }) => {
     // ---------------------------------------------------------------------
-    // STRICT XFAIL — the pattern F4-S2's QA introduced on this project, and
-    // the one F5-S2's AC2b used for exactly this reason one story earlier.
+    // This test was written as a STRICT xfail (`test.fail(true, ...)`) because
+    // F6-S1 did not exist: there was no map, no pin and no legend to assert
+    // against, and a test written then would have passed by being vacuous.
     //
-    // "Stay rust on the map" is a render fact and belongs in a browser, but
-    // F6-S1 (the Leaflet map) is not built: there is no map, no pin and no
-    // legend to assert against. A test written now would pass by being
-    // vacuous, or would have to be skipped.
+    // The marker was deleted when F6-S1 landed, which is exactly the decay
+    // curve it was chosen for: a `test.skip()` would have exited 0 forever,
+    // while a strict xfail turns into "expected to fail, but passed" — a gate
+    // FAILURE — the moment a map renders, forcing whoever lands the map to
+    // come back here and confirm the assertion for real. It did.
     //
-    // `test.fail()` rather than `test.skip()`, and the reason is the defect
-    // class this project has hit FOUR times: a skip exits 0 and is
-    // indistinguishable from a pass. This fails LOUDLY the day the gap
-    // closes — the moment a map renders and this passes, Playwright reports
-    // "expected to fail, but passed", which forces whoever lands F6-S1 to
-    // delete this marker and confirm the assertion for real. The opposite
-    // decay curve from a comment.
+    // The test body below is unchanged from QA's.
     //
-    // The L2 half of this clause is NOT deferred and is already asserted:
+    // The L2 half of this clause was never deferred and is already asserted:
     // `test_a_filter_relabels_every_comp_and_removes_none` pins that a
     // filtered comp stays in the payload with its coordinates, which is the
     // precondition without which no map could draw it.
     // ---------------------------------------------------------------------
-    test.fail(
-      true,
-      "F6-S1 (Leaflet map) is not built, so there is no pin to assert a state on. Remove " +
-        "this marker when the map renders — see this test's note.",
-    );
-
     let victim = "";
     await page.route("**/api/derive", async (route: Route) => {
       const response = await route.fetch();

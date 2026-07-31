@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import type { components } from "../api/schema";
 import { postJson } from "../api/http";
 import { useDerive, type DeriveStatus } from "../api/useDerive";
+import CompMap from "../components/CompMap";
 import type { OpenPull } from "../pull";
 import { PROPERTY_TYPES, toRequestBody, type SearchValues } from "./search/searchValues";
 
@@ -219,6 +220,15 @@ export default function Results({ pull, onWiden }: ResultsProps) {
    *
    * Both halves read `comp.state`, which the SERVER decided. Nothing here
    * re-evaluates a filter predicate (D5/D13).
+   *
+   * F6-S1: these two, and the map's pins, are three views of ONE client-side
+   * source — the single `derived` object `useDerive` sets atomically per
+   * response — partitioned in one place, here, by `comp.state` and nothing
+   * else. The map is handed `derived.comps` whole because it draws every comp
+   * (excluded and filtered ones keep their pins); the list is handed the
+   * non-filtered slice of the same array, in the same render, from the same
+   * payload. No panel re-derives membership and no panel can be a payload
+   * behind another.
    */
   const visible = payloadForThisPull
     ? payloadForThisPull.comps.filter((comp) => comp.state !== "filtered")
@@ -355,6 +365,11 @@ export default function Results({ pull, onWiden }: ResultsProps) {
         />
       )}
       <DeriveStatusLine status={status} error={error} />
+      {/* F6 epic Entry: the map occupies the top of Results and is always
+          visible with the list — it is not a panel the user opens. F7 epic
+          Entry puts the filter strip between the map and the list, which is
+          why it follows here. */}
+      <CompMap comps={payloadForThisPull.comps} subject={SUBJECT} />
       <FilterStrip strip={strip} onChange={setStrip} onReset={resetFilters} />
       <AnchorPanel anchor={payloadForThisPull.anchor} />
       <CompList

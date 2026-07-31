@@ -71,8 +71,13 @@ const MAP_HEIGHT_PX = 420;
  * NORTH_STAR: state the absence, never fill it in. This is the only judgement
  * this component makes, and it is a judgement about a *missing field*, not
  * about membership.
+ *
+ * Not exported: D23 scopes the Vitest leg to `useDerive`'s timing and nothing
+ * else, so an exported seam with no importer would be dead surface. The (0, 0)
+ * branch is asserted end-to-end by F6-S1's AC9; the `null`/`NaN` branches are
+ * deliberately unasserted until row 9d makes them reachable.
  */
-export function hasHonestCoordinate(lat: unknown, lng: unknown): boolean {
+function hasHonestCoordinate(lat: unknown, lng: unknown): boolean {
   if (typeof lat !== "number" || typeof lng !== "number") return false;
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
   return !(lat === 0 && lng === 0);

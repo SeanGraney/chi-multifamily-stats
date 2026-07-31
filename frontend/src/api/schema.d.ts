@@ -244,6 +244,8 @@ export interface components {
       comp_keys: {
         [key: string]: string[];
       };
+      /** Dropped Outside Window */
+      dropped_outside_window?: number | null;
     };
     /**
      * BucketStat
@@ -842,6 +844,11 @@ export interface components {
        * @default false
        */
       force_refresh?: boolean;
+      /**
+       * Resume
+       * @default false
+       */
+      resume?: boolean;
     };
     /**
      * SearchResult

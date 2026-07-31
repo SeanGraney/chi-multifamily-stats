@@ -228,7 +228,10 @@ def test_pull_exists_never_shapes_the_evidence(home, monkeypatch) -> None:
     def _boom(*args, **kwargs):
         raise AssertionError("pull_exists shaped the pull to answer a boolean")
 
-    monkeypatch.setattr(pulls_module, "shape_raw_pull", _boom, raising=True)
+    # F4-S6: the module binds the summary form now (it carries
+    # `dropped_outside_window` to the wire). `raising=True` is kept — the
+    # point of this patch is that arming fails loudly if the door is renamed.
+    monkeypatch.setattr(pulls_module, "shape_raw_pull_with_summary", _boom, raising=True)
     _complete_entry()
 
     assert pull_exists(KEY) is True

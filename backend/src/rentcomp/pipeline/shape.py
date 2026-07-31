@@ -177,10 +177,18 @@ def shape_raw_pull(
 ) -> tuple[StitchedComp, ...]:
     """Dedupe -> spells -> stitch -> classify -> window filter + cohort.
 
-    The comps-only entry point, and the one `storage/pulls.py` calls. It
-    *delegates* to `shape_raw_pull_with_summary` and drops the summary rather
-    than re-implementing the chain, so the two can never drift into two
-    shaping runs that disagree.
+    The comps-only entry point. It *delegates* to
+    `shape_raw_pull_with_summary` and drops the summary rather than
+    re-implementing the chain, so the two can never drift into two shaping runs
+    that disagree.
+
+    ⚠ As of F4-S6 this has no production caller: `storage/pulls.py` takes the
+    summary form, because `ShapingSummary.dropped_outside_window` now reaches
+    the wire (`Breakdown.dropped_outside_window`) so the empty state can name
+    the binding constraint. It is kept as the projection a body of tests
+    compares tuples against directly, and because dropping it would be a
+    refactor this story did not ask for — but it is now a test-facing seam
+    rather than the path the product takes. Disclosed to the PM.
 
     Deterministic: groups are visited in sorted-key order, so two calls over
     the same inputs produce the same tuple in the same order.

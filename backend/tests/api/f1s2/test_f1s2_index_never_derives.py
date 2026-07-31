@@ -133,7 +133,15 @@ EXPENSIVE_DOORS: tuple[tuple[str, str], ...] = (
     # Record shaping, reachable independently of the loader. F4-S4 split
     # `shape_raw_pull` into a thin wrapper over `shape_raw_pull_with_summary`,
     # so both are doors and the wrapper is not the bottom of the stack.
-    ("rentcomp.storage.pulls", "shape_raw_pull"),
+    #
+    # F4-S6 UPDATE: `storage/pulls.py` now imports the *summary* form, because
+    # it has to carry `dropped_outside_window` to the wire. The door on that
+    # module is therefore the name it actually binds — arming the old one blew
+    # up with `raising=True`, which is this list working exactly as intended
+    # rather than a failure to be worked around. Both names on
+    # `pipeline.shape` stay armed, so nothing that used to be bricked up is
+    # reachable now.
+    ("rentcomp.storage.pulls", "shape_raw_pull_with_summary"),
     ("rentcomp.pipeline.shape", "shape_raw_pull"),
     ("rentcomp.pipeline.shape", "shape_raw_pull_with_summary"),
     # The derivation itself — an anchor per row needs this as well as a loader.

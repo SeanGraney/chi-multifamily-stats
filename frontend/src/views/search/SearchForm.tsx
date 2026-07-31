@@ -137,9 +137,35 @@ export default function SearchForm({ onCancel, onSubmitted, initialValues }: Sea
       // the route that can spend money.
       return;
     }
+    const requestBody = toRequestBody(values);
+
+    /**
+     * Make sure the plan is in hand BEFORE the progress surface goes up.
+     *
+     * The whole content of that surface is the planner's cohort years (F4 step
+     * 2's "per-year pull"; D5 — the browser must never reconstruct them), and
+     * the preview is debounced 400ms, so a user who fills the last field and
+     * submits immediately would otherwise watch a phase list that cannot say
+     * which years it is pulling. Cheap and safe to wait for: `POST
+     * /api/search/plan` is structurally incapable of spending a call
+     * (`api/plan.py`), and it is skipped entirely in the common case where the
+     * preview has already landed.
+     *
+     * Best-effort: a plan that fails to load must not block the search the user
+     * asked for. The progress surface degrades to the phases without years, and
+     * the search itself carries its own error reporting.
+     */
+    if (!plan) {
+      try {
+        setPlan(await postJson<SearchPlan>("/api/search/plan", requestBody));
+      } catch {
+        /* the pull is still the user's to run — see above */
+      }
+    }
+
     setSubmitting(true);
     try {
-      const result = await postJson<SearchResult>("/api/search", toRequestBody(values));
+      const result = await postJson<SearchResult>("/api/search", requestBody);
       saveSearchValues(values);
       onSubmitted(result, values);
     } catch (error: unknown) {

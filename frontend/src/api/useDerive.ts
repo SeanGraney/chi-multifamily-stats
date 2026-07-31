@@ -59,7 +59,22 @@ function isAbort(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
 
-export function useDerive(request: DeriveRequest | null): UseDeriveResult {
+/**
+ * @param request the complete curation state, or `null` to derive nothing at
+ *   all. `null` is not an idle placeholder waiting for a default — it is the
+ *   state "no pull is open", and no request is issued in it (F4-S6 AC8b).
+ * @param epoch bump to re-issue an *identical* request. Everything this hook
+ *   normally reacts to is a change in the request body, which is right for
+ *   curation: the same body means the same answer. It stops being right when
+ *   the evidence behind the ref changes underneath a fixed body — which is
+ *   exactly what completing a partial pull does (F4-S6 AC6: a resume appends
+ *   the missing window *under the existing ref*). Without this, a resume would
+ *   fetch the missing cohort and leave the user looking at the numbers computed
+ *   without it. Deliberately not a field on the request: `DeriveRequest` is
+ *   `extra="forbid"`, and a cache-buster in the body would be a lie about what
+ *   the derivation depends on.
+ */
+export function useDerive(request: DeriveRequest | null, epoch = 0): UseDeriveResult {
   const [state, setState] = useState<DeriveState>(IDLE);
 
   /**
@@ -121,7 +136,7 @@ export function useDerive(request: DeriveRequest | null): UseDeriveResult {
       clearTimeout(timer);
       controller?.abort();
     };
-  }, [body]);
+  }, [body, epoch]);
 
   return state;
 }

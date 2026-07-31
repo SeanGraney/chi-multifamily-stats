@@ -43,6 +43,12 @@ type SearchResult = components["schemas"]["SearchResult"];
 export interface SearchFormProps {
   onCancel: () => void;
   onSubmitted: (result: SearchResult, values: SearchValues) => void;
+  /**
+   * Open the form on these values instead of the remembered ones (F4-S6 AC3 —
+   * a widen shortcut hands back the same search with one constraint loosened).
+   * Absent means the normal `searchMemory` behaviour.
+   */
+  initialValues?: SearchValues;
 }
 
 /**
@@ -53,8 +59,8 @@ export interface SearchFormProps {
  */
 const PREVIEW_DEBOUNCE_MS = 400;
 
-export default function SearchForm({ onCancel, onSubmitted }: SearchFormProps) {
-  const [values, setValues] = useState<SearchValues>(loadSearchValues);
+export default function SearchForm({ onCancel, onSubmitted, initialValues }: SearchFormProps) {
+  const [values, setValues] = useState<SearchValues>(() => initialValues ?? loadSearchValues());
   const [touched, setTouched] = useState<Partial<Record<keyof SearchValues, boolean>>>({});
   const [attempted, setAttempted] = useState(false);
   const [plan, setPlan] = useState<SearchPlan | null>(null);
@@ -141,6 +147,15 @@ export default function SearchForm({ onCancel, onSubmitted }: SearchFormProps) {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  // F4 step 2: "progress indicator: per-year pull → stitching → deriving". The
+  // pull is one long request, so while it is in flight there is nothing else
+  // honest to show — the form is replaced rather than left sitting behind a
+  // disabled button for the length of a real pull. A failure puts it back, with
+  // `submitError` on it.
+  if (submitting) {
+    return <PipelineProgress plan={plan} />;
   }
 
   return (
@@ -336,6 +351,67 @@ export default function SearchForm({ onCancel, onSubmitted }: SearchFormProps) {
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * F4 step 2's progress indicator: **per-year pull → stitching → deriving**
+ * (F4-S6 AC1).
+ *
+ * PHASE-LEVEL, AND HONEST ABOUT WHY
+ * ----------------------------------
+ * `POST /api/search` is one request that runs the whole plan server-side, so
+ * the browser cannot observe which phase is executing. Two options follow, and
+ * only one of them is allowed here: animate a bar that *looks* like measured
+ * progress, or name the phases the pipeline actually runs and say plainly that
+ * they are a description rather than a position. A progress indicator that
+ * implies knowledge it does not have is the same class of defect as a number
+ * the evidence does not support — smaller stakes, identical shape — so this
+ * names the work and claims nothing about how far through it is.
+ *
+ * THE YEARS ARE THE PLAN'S, NEVER THE BROWSER'S ARITHMETIC (D5)
+ * -------------------------------------------------------------
+ * `plan.cohorts[].year` comes off `POST /api/search/plan`. Reconstructing it
+ * here as `new Date().getFullYear() - i` would be a second implementation of
+ * the planner's calendar rules — it wraps a window that spans New Year and
+ * clamps Feb 29 in non-leap years — and the two would disagree on exactly the
+ * dates a user would never think to check. Same rule the preview line above
+ * already follows, and pinned by `f4s6-pipeline-states.spec.ts` AC1b, which
+ * serves a plan of 1999/1998 precisely because no clock can produce those.
+ *
+ * `fetchable: false` is a planned window that has not opened yet (F4-S1 AC4).
+ * It is listed and marked rather than hidden: a cohort silently missing from
+ * the progress list is the same "silently absent" problem one layer up.
+ */
+function PipelineProgress({ plan }: { plan: SearchPlan | null }) {
+  return (
+    <section data-testid="pipeline-progress" role="status" aria-live="polite" className="p-6">
+      <h1 className="text-amber text-xl">Running the pull</h1>
+      <p className="mt-2 text-xs text-grey">
+        One request runs the whole plan, so these are the phases it works
+        through — not a measured position.
+      </p>
+      <ol className="mt-3 text-sm text-white">
+        {(plan?.cohorts ?? []).map((cohort) => (
+          <li key={cohort.year} className="py-0.5">
+            Pull · {cohort.year}
+            {cohort.fetchable ? (
+              ""
+            ) : (
+              <span className="text-grey"> — not yet open, nothing to fetch</span>
+            )}
+          </li>
+        ))}
+        <li className="py-0.5">Stitch · re-lists merged into one spell</li>
+        <li className="py-0.5">Derive · premiums, anchor, buckets</li>
+      </ol>
+      {plan && (
+        <p className="mt-3 text-xs text-grey">
+          {plan.cohorts.length} {plan.cohorts.length === 1 ? "cohort" : "cohorts"} · est.{" "}
+          {plan.estimated_calls} API calls
+        </p>
+      )}
+    </section>
   );
 }
 

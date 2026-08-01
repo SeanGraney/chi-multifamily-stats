@@ -68,7 +68,21 @@ const SEARCH_URL = `${BASE_URL}/api/search`;
 /** The live-preview route (F2-S3, QA-proposed — see the L2 file). */
 const PLAN_PATH = "/api/search/plan";
 
-test.describe.configure({ mode: "serial" });
+/**
+ * NO `test.describe.configure({ mode: "serial" })` — removed under QUEUE row
+ * 44a (PM-authorised).
+ *
+ * It bailed every test after the first failure, so one stale assertion in the
+ * prefill test reported as `1 failed, 11 did not run` — and "did not run" is
+ * the same family as the silent skip WORKFLOW.md §2 records repeated
+ * recurrences of: it hides how much of the suite is actually red, which is not
+ * a number anyone can merge on.
+ *
+ * It bought nothing: `playwright.config.ts` already pins `workers: 1,
+ * fullyParallel: false`, and every test below opens its own form via
+ * `openSearchForm` (which re-navigates from scratch) — none depends on
+ * another's state.
+ */
 
 let serverProcess: ChildProcess | null = null;
 let rentcompHome: string | null = null;
@@ -394,10 +408,41 @@ test.describe("F2 · New Search form", () => {
     // is satisfied by construction. Flagged to the PM as an AC ambiguity.)
     await openSearchForm(page);
     await fillValidSearch(page);
+
+    /**
+     * ⚠ WAIT FOR THE SEARCH TO FINISH, NOT FOR THE FORM TO DISAPPEAR.
+     *
+     * This used to be `expect(search-form).toBeHidden()`, which meant "the
+     * search finished" only for as long as the form stayed on screen for the
+     * duration of the request. F4-S6 added the progress surface — `SearchForm`
+     * now returns `<PipelineProgress/>` while `submitting` — so the form
+     * vanishes the instant the request *starts*, and this test raced ahead and
+     * called `page.goto("/")` before the response landed.
+     *
+     * That matters because `saveSearchValues(values)` runs *after*
+     * `await postJson("/api/search")` resolves, so the reload discarded the
+     * pending write and the reopened form was blank. The assertion's intent was
+     * never wrong; only its trigger went stale.
+     *
+     * So wait for the two things that are actually load-bearing, in order:
+     * the response arrives, and then the app *acts* on it by landing the user
+     * on Results (F4 flow step 4, `App.openPull`) — which happens strictly
+     * after the values are persisted. Waiting on the response alone would still
+     * race the continuation that writes them.
+     */
+    const searchFinished = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().replace(/\/$/, "") === SEARCH_URL,
+      { timeout: 20_000 },
+    );
     await submitButton(page).click();
-    await expect(byTestIdOr(page, "search-form", page.getByRole("form")).first()).toBeHidden({
-      timeout: 15_000,
-    });
+    await searchFinished;
+    await expect(
+      page.getByRole("heading", { name: /^results$/i }),
+      "the search never landed the user on Results, so it did not complete successfully and " +
+        "nothing was ever persisted — this test cannot say anything about prefill until it does",
+    ).toBeVisible({ timeout: 15_000 });
 
     await openSearchForm(page);
     await expect(

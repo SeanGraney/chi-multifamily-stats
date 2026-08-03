@@ -56,6 +56,32 @@ own suite pins the replacement behaviour both ways —
 (a 4-of-6 pull reports its gap) and `::test_derive_reports_no_gap_for_a_
 complete_pull` (a whole pull still reports `null`).
 
+**F5-S1 EXERCISES IT FOR THE LAST TIME — `sqft_suspect` is real now.** The
+">30% off the cohort median $/sqft" test is built where the cohort median
+already exists (F4-S5's premium stage), so the field now answers a question
+about each comp instead of always saying `False`. Its warning is therefore
+deleted and the expected count here drops **1 → 0**, which empties
+`EXPECTED_PROVISIONAL_FIELDS` and completes the retirement this file has been
+counting down since WS-1a. F5-S1's own suite pins the replacement behaviour in
+both directions — `test_f5s1_row_fields_on_the_wire.py::
+test_the_leavitt_comp_raises_the_verify_sqft_flag` (the real +157% comp is
+flagged) and `::test_the_flag_is_not_raised_on_everything` +
+`::test_a_comp_with_no_sqft_is_never_suspect` (it does not fire on the rest of
+the pull, and never on a comp with nothing to measure).
+
+⚠ **Two tests below go vacuously green when the set empties** (`==` against an
+empty collection), which is the intended end state of a countdown, not a hole:
+`test_a_field_that_became_real_no_longer_warns` inherits `sqft_suspect` into
+`RETIRED_PROVISIONAL_FIELDS` and keeps asserting — with teeth — that the
+retired warning does not come back. That is where this file's remaining value
+sits once every placeholder is real.
+
+Edited by QA on `story/F5-S1-qa` **before** the developer started, so the
+retirement runs red like the rest of this story's red state. Flagged to the PM
+at handoff: a deliberate change to an existing spec, made under the convention
+this file documents and under F4-S5's and F4-S9's precedent — not a spec
+weakened to reach green.
+
 WHAT THIS FILE PINS, DELIBERATELY LOOSELY
 ------------------------------------------
 The OUTCOME (three distinct provisional-field warnings exist, each
@@ -74,13 +100,14 @@ PROVISIONAL_FIELD_CODE = "provisional_field"
 
 #: The fields still provisional, and a substring each warning's message must
 #: contain to prove it names *itself* and not something else. `partial_pull`
-#: was here until F4-S9 made it real, and `premium_basis` until F4-S5 did
-#: (module docstring).
-EXPECTED_PROVISIONAL_FIELDS = {"sqft_suspect"}
+#: was here until F4-S9 made it real, `premium_basis` until F4-S5 did, and
+#: `sqft_suspect` until F5-S1 did (module docstring). **Empty is the finish
+#: line, not a hole** — see the ⚠ note in the docstring.
+EXPECTED_PROVISIONAL_FIELDS: set[str] = set()
 
 #: A field whose warning has been retired must not linger: a warning for a
 #: value that IS computed trains the user to ignore the ones that matter.
-RETIRED_PROVISIONAL_FIELDS = {"partial_pull", "premium_basis"}
+RETIRED_PROVISIONAL_FIELDS = {"partial_pull", "premium_basis", "sqft_suspect"}
 
 
 def _provisional_field_warnings(derived: dict) -> list[dict]:

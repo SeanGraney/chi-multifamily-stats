@@ -14,7 +14,6 @@
     "cohort_year": 2026,
     "first_listed": "2026-01-05",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [
       {
         "on": "2026-02-15",
@@ -40,7 +39,6 @@
     "cohort_year": 2025,
     "first_listed": "2025-09-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [
       {
         "on": "2025-10-20",
@@ -71,7 +69,6 @@
     "cohort_year": 2025,
     "first_listed": "2025-05-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 1,
     "gap_days": 19
@@ -91,7 +88,6 @@
     "cohort_year": 2026,
     "first_listed": "2026-03-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 1,
     "gap_days": 35
@@ -111,7 +107,6 @@
     "cohort_year": 2025,
     "first_listed": "2025-04-01",
     "withdrawal_suspect": true,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0
@@ -131,7 +126,6 @@
     "cohort_year": 2025,
     "first_listed": "2025-06-12",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0
@@ -151,7 +145,6 @@
     "cohort_year": 2025,
     "first_listed": "2025-04-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [
       {
         "on": "2025-06-11",
@@ -177,7 +170,6 @@
     "cohort_year": 2026,
     "first_listed": "2026-02-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 1,
     "gap_days": 0
@@ -197,7 +189,6 @@
     "cohort_year": 2025,
     "first_listed": "2025-02-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0
@@ -217,7 +208,6 @@
     "cohort_year": 2026,
     "first_listed": "2026-06-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0
@@ -237,7 +227,6 @@
     "cohort_year": 2024,
     "first_listed": "2024-08-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0
@@ -257,7 +246,6 @@
     "cohort_year": 2025,
     "first_listed": "2025-06-28",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0
@@ -277,7 +265,6 @@
     "cohort_year": 2026,
     "first_listed": "2026-06-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0
@@ -297,7 +284,6 @@
     "cohort_year": 2026,
     "first_listed": "2026-04-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0
@@ -317,7 +303,6 @@
     "cohort_year": 2026,
     "first_listed": "2026-01-10",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [
       {
         "on": "2026-02-10",
@@ -348,7 +333,6 @@
     "cohort_year": 2026,
     "first_listed": "2026-04-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [
       {
         "on": "2026-06-10",
@@ -374,7 +358,6 @@
     "cohort_year": 2025,
     "first_listed": "2025-01-05",
     "withdrawal_suspect": true,
-    "sqft_suspect": false,
     "cut_history": [
       {
         "on": "2025-02-20",
@@ -400,7 +383,6 @@
     "cohort_year": 2025,
     "first_listed": "2025-06-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0
@@ -420,7 +402,6 @@
     "cohort_year": 2024,
     "first_listed": "2024-05-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0
@@ -440,7 +421,6 @@
     "cohort_year": 2026,
     "first_listed": "2026-05-01",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0
@@ -460,7 +440,6 @@
     "cohort_year": 2026,
     "first_listed": "2026-05-29",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [
       {
         "on": "2026-07-09",
@@ -486,7 +465,6 @@
     "cohort_year": 2025,
     "first_listed": "2025-10-27",
     "withdrawal_suspect": false,
-    "sqft_suspect": false,
     "cut_history": [
       {
         "on": "2025-12-25",

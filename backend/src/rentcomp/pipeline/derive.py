@@ -65,7 +65,7 @@ from rentcomp.pipeline.buckets import bucket_of, bucket_stats
 from rentcomp.pipeline.cohorts import basis_by_year, cohort_medians, median_by_year
 from rentcomp.pipeline.keys import disambiguate_keys
 from rentcomp.pipeline.membership import classify_membership, distances_mi
-from rentcomp.pipeline.premium import compute_premiums
+from rentcomp.pipeline.premium import compute_premiums, compute_sqft_suspects
 from rentcomp.pipeline.pricetest import price_test
 from rentcomp.pipeline.weights import contribution_shares, effective_weights
 from rentcomp.storage.config import Config
@@ -105,7 +105,10 @@ DRIFT_SENSITIVITY_PTS = 2.0
 #: `min_cohort_size` selected comps now takes its median over the pulled set,
 #: so premiums in thin cohorts change value. That is a change in output
 #: numbers, not just in fields, hence the bump.
-PIPELINE_VERSION = "0.1.0-f4s5"
+#: F5-S1 makes `sqft_suspect` real (it was hardcoded `False` on every comp)
+#: and adds `Cut.day_offset`. Both change what a payload from this build says,
+#: hence the bump.
+PIPELINE_VERSION = "0.1.0-f5s1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +168,12 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
     included = [state == "included" for state in states]
 
     cohorts = cohort_medians(keys, psfs, years, weights, included, cfg.min_cohort_size)
-    premiums = compute_premiums(psfs, years, median_by_year(cohorts))
+    medians = median_by_year(cohorts)
+    premiums = compute_premiums(psfs, years, medians)
+    # F5-S1 AC6: the same deviation `premium` reports, judged against the same
+    # median — per request, because that median is taken over the SELECTED
+    # comps and moves as the user curates.
+    sqft_suspects = compute_sqft_suspects(psfs, years, medians)
     # F4-S5: a premium's basis is its own cohort's basis, read off the same
     # `CohortStat` the median came from — so a row can never be labelled with a
     # provenance its cohort does not have.
@@ -199,14 +207,26 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
     contributions = contribution_shares(weights, included)
     derived_comps = [
         _derived_comp(
-            comp, key, psf, premium, basis, bucket, distance, weight, share, state, ctx.as_of
+            comp,
+            key,
+            psf,
+            premium,
+            basis,
+            suspect,
+            bucket,
+            distance,
+            weight,
+            share,
+            state,
+            ctx.as_of,
         )
-        for comp, key, psf, premium, basis, bucket, distance, weight, share, state in zip(
+        for comp, key, psf, premium, basis, suspect, bucket, distance, weight, share, state in zip(
             comps,
             keys,
             psfs,
             premiums,
             premium_bases,
+            sqft_suspects,
             comp_buckets,
             distances,
             weights,
@@ -247,6 +267,7 @@ def _derived_comp(
     psf: float | None,
     premium: float | None,
     premium_basis: Basis | None,
+    sqft_suspect: bool,
     bucket: str | None,
     distance: float,
     weight: float,
@@ -261,6 +282,13 @@ def _derived_comp(
     one thing: `days_since_removal`, the same subtraction `pipeline/shape.py`
     already classified the comp by, restated as a number the row can print.
 
+    `Cut.day_offset` is the second such subtraction (F5-S1 AC9): *"day 71"* in
+    the row's `✂ 1,700 → 1,600 (day 71)` is `cut.on − first_listed`, computed
+    here so the view never subtracts two dates (D5 forbids the derivation, D15
+    forbids the JS date arithmetic). It is `None` — never 0, which would read
+    as "cut on the day it listed" — when the comp never said when it was
+    listed, which is every comp not built by `shape_raw_pull`.
+
     `shape.py` measured `as_of − the chain's final removal`; `removed_on`
     reconstructs that same day from the `effective_dom` that measurement
     produced. So the rung and the figure beside it cannot disagree about when
@@ -268,6 +296,7 @@ def _derived_comp(
     `tests/unit/test_f4s8_removed_on.py`.
     """
     removed_on = comp.removed_on
+    first_listed = comp.first_listed
     return DerivedComp(
         key=key,
         address=comp.address,
@@ -287,9 +316,14 @@ def _derived_comp(
         removal_class=comp.removal_class,
         days_since_removal=None if removed_on is None else (as_of - removed_on).days,
         withdrawal_suspect=comp.withdrawal_suspect,
-        sqft_suspect=comp.sqft_suspect,
+        sqft_suspect=sqft_suspect,
         cut_history=[
-            Cut(on=cut.on, from_price=cut.from_price, to_price=cut.to_price)
+            Cut(
+                on=cut.on,
+                from_price=cut.from_price,
+                to_price=cut.to_price,
+                day_offset=None if first_listed is None else (cut.on - first_listed).days,
+            )
             for cut in comp.cut_history
         ],
         relist_count=comp.relist_count,
@@ -383,13 +417,14 @@ def _warnings(
     so a placeholder number cannot reach a screen (or a screenshot) without
     the label that says what it is. They disappear as their stories land.
 
-    The `provisional_field` entries (WS-1a, ADR-002 finding 5) are the same
-    self-documenting convention applied to individual FIELDS rather than
-    whole stages: `sqft_suspect` is an honest default for what this pipeline
-    actually computes today, not a placeholder standing in for a real number —
-    but nothing signals it is provisional until F5-S1 builds the real
-    computation it is a stand-in for. Each warning is unconditional and each
-    disappears independently as its own story lands.
+    The `provisional_field` entries (WS-1a, ADR-002 finding 5) were the same
+    self-documenting convention applied to individual FIELDS rather than whole
+    stages: an honest default, labelled as provisional until the story that
+    computes it for real lands and deletes its own warning. **The family is
+    now empty** — see the three retirements below — and that is the finish
+    line the convention was counting down to, not a hole:
+    `tests/api/test_ws1a_provisional_field_warnings.py` keeps asserting that
+    none of the three comes back.
 
     **`premium_basis`'s entry is retired here (F4-S5).** It is no longer
     always `"selected"`: a cohort below `min_cohort_size` falls back to the
@@ -404,16 +439,17 @@ def _warnings(
     `None` now means "this pull has no gap" rather than "nobody has looked".
     That was the whole point of the convention — the story that makes a
     placeholder real clears its own warning.
+
+    **`sqft_suspect`'s entry is retired here (F5-S1), and it was the last
+    one.** The flag is no longer always `False`: `pipeline/premium.py`
+    computes it per request as `abs(premium) > SQFT_SUSPECT_THRESHOLD` against
+    the same cohort median the premium beside it reports, so the field now
+    answers a question about each comp. Its replacement behaviour is pinned in
+    both directions by `tests/api/test_f5s1_row_fields_on_the_wire.py` (the
+    real +157% comp flags; the rest of the pull does not, and a comp with no
+    $/sqft never does).
     """
-    warnings: list[DerivedWarning] = [
-        DerivedWarning(
-            code="provisional_field",
-            message=(
-                "sqft_suspect is always false — the >30% cohort-median $/sqft deviation "
-                "flag (F5-S1) is not built yet."
-            ),
-        ),
-    ]
+    warnings: list[DerivedWarning] = []
 
     missing = [key for key, psf in zip(keys, psfs, strict=True) if psf is None]
     if missing:

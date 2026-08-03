@@ -819,7 +819,6 @@ def _build_comp(chain: Sequence[Spell], suspect: bool, as_of: date, config: Conf
         cohort_year=first.listed.year,
         first_listed=first.listed,
         withdrawal_suspect=suspect,
-        sqft_suspect=False,
         cut_history=tuple(cut_history),
         relist_count=len(chain) - 1,
         gap_days=gap_days_total,

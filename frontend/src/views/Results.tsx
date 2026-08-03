@@ -974,7 +974,88 @@ interface CompRowProps {
   onWeightChange: (key: string, weight: number) => void;
 }
 
+type Cut = DerivedComp["cut_history"][number];
+
+/** Whole numbers with a thousands separator. Display only (D14). */
+const whole = (value: number) =>
+  value.toLocaleString("en-US", { maximumFractionDigits: 0 });
+
+/**
+ * A number followed by a *word*, with a space between them.
+ *
+ * Not decoration: `3bd` and `1,380sf` glue a digit to a letter, and a reader
+ * scanning a 567-row list parses "3 bd · 2 ba · 1,380 sf" and mis-parses
+ * "3bd·2ba·1,380sf". §6.4's mock uses the tight form; this is a [DEFAULT]
+ * deviation from its punctuation only — every fact it names is present.
+ */
+const unit = (value: number, suffix: string) => `${value} ${suffix}`;
+
+/**
+ * The Zillow deep link for a comp (spec §6.4, §2 "amenity comparison by eye").
+ *
+ * RentCast ships no photos and no listing URLs, so this and Street View are
+ * the entire visual-inspection path — and, for a `sqft_suspect` row, the
+ * verification path the flag is pointing at (spec §7).
+ */
+function zillowHref(comp: DerivedComp): string {
+  const slug = comp.address.trim().replace(/\s+/g, "-");
+  return `https://www.zillow.com/homes/${encodeURIComponent(slug)}_rb/`;
+}
+
+/** Google Street View at the comp's own coordinates — building condition. */
+function streetViewHref(comp: DerivedComp): string {
+  return (
+    "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=" +
+    `${comp.lat.toFixed(4)},${comp.lng.toFixed(4)}`
+  );
+}
+
+/**
+ * §6.4's outcome string, in its four forms.
+ *
+ * NORTH_STAR's single most important distinction lives in this one string, so
+ * it is written as an exhaustive branch rather than a template with optional
+ * parts:
+ *
+ * * **censored** — still listed. Its DOM is a *floor*, marked with `+`, and
+ *   the word "leased" must never appear on it.
+ * * **pending** — removed less than 7 days ago, too recent to trust. It is
+ *   *excluded* from lease statistics, so it says "classifying", not "leased".
+ * * **provisional** — counted as leased, and marked, so the confidence ladder
+ *   is visible to the reader rather than hidden in a tooltip.
+ * * **confirmed** — leased, unhedged.
+ *
+ * ⚠ `days_since_removal` is read as `number | null` and NOT asserted to exist
+ * (row 10b): the wire docstring's "`None` iff `removal_class` is `None`" is a
+ * pipeline guarantee, not a type guarantee, and it is false for any pull that
+ * did not go through `shape_raw_pull`. Losing the number costs the number, not
+ * the rung — the row never prints "removed nulld".
+ *
+ * No arithmetic here, in either branch: `effective_dom` and
+ * `days_since_removal` both arrive as whole-day counts precisely so that the
+ * view has nothing left to do but format them (D5/D15).
+ */
+function outcomeText(comp: DerivedComp): string {
+  if (comp.censored) return `active ${comp.effective_dom}+ days`;
+  const since = comp.days_since_removal;
+  switch (comp.removal_class) {
+    case "confirmed":
+      return `leased ${unit(comp.effective_dom, "days")}`;
+    case "provisional":
+      return `leased ${unit(comp.effective_dom, "days")} · provisional`;
+    case "pending":
+      return since === null || since === undefined
+        ? "removed recently — classifying"
+        : `removed ${unit(since, "days")} ago — classifying`;
+    default:
+      // Not reachable through `shape_raw_pull` (a removed chain always gets a
+      // rung), and still not rendered as a lease if it ever arrives.
+      return `off market ${unit(comp.effective_dom, "days")}`;
+  }
+}
+
 function CompRow({ comp, weight, onWeightChange }: CompRowProps) {
+  const [expanded, setExpanded] = useState(false);
   const included = weight > 0;
   const label = `${comp.address}${comp.unit ? ` #${comp.unit}` : ""}`;
 
@@ -982,44 +1063,256 @@ function CompRow({ comp, weight, onWeightChange }: CompRowProps) {
     <li
       data-testid="comp-row"
       data-comp-key={comp.key}
-      className="text-sm text-grey py-0.5 flex items-baseline gap-2"
+      className="text-sm text-grey py-1 border-b border-surface"
     >
-      <input
-        type="checkbox"
-        data-testid="comp-include-toggle"
-        aria-label={`Include ${label}`}
-        checked={included}
-        onChange={() => onWeightChange(comp.key, included ? 0 : INCLUDED_WEIGHT)}
-      />
-      <input
-        type="number"
-        data-testid="comp-weight"
-        aria-label={`Weight for ${label}`}
-        min={0}
-        step={0.25}
-        value={String(weight)}
-        onChange={(event) => {
-          const raw = event.target.value;
-          // An emptied box reads as 0, which is exactly "not selected" — the
-          // same state the checkbox writes, because there is only one state.
-          const parsed = raw === "" ? 0 : Number(raw);
-          if (!Number.isFinite(parsed) || parsed < 0) return;
-          onWeightChange(comp.key, parsed);
-        }}
-        className="w-16 bg-surface border border-grey text-white px-1"
-      />
-      <ContributionCell share={comp.contribution_share} />
-      <span>
-        {label} — ${comp.initial_ask.toFixed(0)}
-        {" · "}
-        premium {comp.premium === null ? "—" : `${(comp.premium * 100).toFixed(1)}%`}
-        {" · "}
-        cohort {comp.cohort_year}
-        {" · "}
-        {comp.censored ? `${comp.effective_dom}d and counting (censored)` : `${comp.effective_dom} days`}
-        {comp.removal_class ? ` · ${comp.removal_class}` : ""}
-      </span>
+      {/* ---- line 1: the curation controls and what the unit asked -------- */}
+      <div className="flex items-baseline gap-2 flex-nowrap">
+        <input
+          type="checkbox"
+          data-testid="comp-include-toggle"
+          aria-label={`Include ${label}`}
+          checked={included}
+          onChange={() => onWeightChange(comp.key, included ? 0 : INCLUDED_WEIGHT)}
+        />
+        <input
+          type="number"
+          data-testid="comp-weight"
+          aria-label={`Weight for ${label}`}
+          min={0}
+          step={0.25}
+          value={String(weight)}
+          onChange={(event) => {
+            const raw = event.target.value;
+            // An emptied box reads as 0, which is exactly "not selected" — the
+            // same state the checkbox writes, because there is only one state.
+            const parsed = raw === "" ? 0 : Number(raw);
+            if (!Number.isFinite(parsed) || parsed < 0) return;
+            onWeightChange(comp.key, parsed);
+          }}
+          className="w-16 bg-surface border border-grey text-white px-1"
+        />
+        <ContributionCell share={comp.contribution_share} />
+        <span data-testid="comp-address" className="text-white truncate min-w-0">
+          {label}
+        </span>
+        <PremiumChip premium={comp.premium} />
+        <span data-testid="comp-ask" className="ml-auto whitespace-nowrap text-white">
+          ${whole(comp.initial_ask)}/mo
+        </span>
+      </div>
+
+      {/* ---- line 2: the unit itself, and how it ended up ----------------- */}
+      <div className="flex items-baseline gap-2 flex-nowrap">
+        <span data-testid="comp-specs" className="whitespace-nowrap">
+          {/* The LISTING's status (PM ruling R3) — `censored` formatted, not
+              `comp.state`, which is the user's own curation and is already on
+              line 1 as the checkbox. */}
+          {comp.censored ? "ACTIVE" : "INACTIVE"}
+          {" · "}
+          {unit(comp.beds, "bd")}
+          {" · "}
+          {comp.baths === null ? "? ba" : unit(comp.baths, "ba")}
+          {" · "}
+          {comp.sqft === null ? "? sf" : `${whole(comp.sqft)} sf`}
+          {" · "}
+          {comp.distance_mi.toFixed(2)} mi
+          {" · "}
+          {comp.cohort_year} cohort
+        </span>
+        <PsfCell comp={comp} />
+        <span
+          data-testid="comp-outcome"
+          className={
+            comp.censored ? "ml-auto whitespace-nowrap text-amber" : "ml-auto whitespace-nowrap"
+          }
+        >
+          {outcomeText(comp)}
+        </span>
+      </div>
+
+      {/* ---- line 3: the history badges, and the way into the detail ------ */}
+      <div className="flex items-baseline gap-3 flex-wrap text-xs">
+        {comp.cut_history.length > 0 && (
+          <span data-testid="comp-cut-history" className="text-amber">
+            {comp.cut_history.map((cut, index) => (
+              <span key={`${cut.on}-${index}`} className="mr-2">
+                ✂ ${whole(cut.from_price)} → ${whole(cut.to_price)}
+                <CutDay cut={cut} />
+              </span>
+            ))}
+          </span>
+        )}
+        {comp.relist_count > 0 && (
+          <span data-testid="comp-stitch-badge">
+            ⟲ re-listed ×{comp.relist_count} ({unit(comp.gap_days, "days")} off market)
+          </span>
+        )}
+        {comp.withdrawal_suspect && (
+          <span
+            data-testid="comp-withdrawal-suspect"
+            className="text-rust"
+            title="Completed a spell, then re-appeared 6 weeks–6 months later — the lease may not have happened. Display only; you decide."
+          >
+            ⚠ withdrawal-suspect
+          </span>
+        )}
+        <button
+          type="button"
+          data-testid="comp-expand"
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
+          onClick={() => setExpanded((open) => !open)}
+          className="ml-auto text-grey underline"
+        >
+          {expanded ? "▾ less" : "▸ detail"}
+        </button>
+      </div>
+
+      {expanded && <CompDetail comp={comp} />}
     </li>
+  );
+}
+
+/**
+ * The day of the spell a cut landed on — `(day 71)`.
+ *
+ * Server-shipped (`Cut.day_offset`) and merely printed here. The temptation is
+ * `cut.on − first_listed` in the browser, which is a derivation D5 puts in
+ * Python and, in JS, date arithmetic across a timezone boundary that D15 keeps
+ * out of this codebase entirely.
+ *
+ * `null` on a comp that never said when it was listed (row 10b's shape). The
+ * cut still renders — losing the day costs the day, not the line.
+ */
+function CutDay({ cut }: { cut: Cut }) {
+  const day = cut.day_offset;
+  if (day === null || day === undefined) return null;
+  return <> (day {day})</>;
+}
+
+/**
+ * A comp's premium against its own cohort, signed and coloured (§6.4).
+ *
+ * Coloured **by sign only** (PM ruling R4). A magnitude threshold here would
+ * be a second judgement on top of the one this story owns — `sqft_suspect` —
+ * and would read as "this comp is too expensive", which is not a claim the
+ * premium supports: an above-cohort comp is evidence, not an error.
+ */
+function PremiumChip({ premium }: { premium: number | null }) {
+  if (premium === null) {
+    return (
+      <span data-testid="comp-premium" className="text-grey whitespace-nowrap">
+        premium —
+      </span>
+    );
+  }
+  const pct = (premium * 100).toFixed(1);
+  return (
+    <span
+      data-testid="comp-premium"
+      className={premium < 0 ? "text-rust whitespace-nowrap" : "text-green whitespace-nowrap"}
+      title="This comp's $/sqft against its own cohort's median $/sqft"
+    >
+      {premium < 0 ? "" : "+"}
+      {pct}%
+    </span>
+  );
+}
+
+/**
+ * The comp's $/sqft, or the reason it has none — and the verify-sqft flag.
+ *
+ * Three mutually exclusive statements, and keeping them distinct is the point:
+ *
+ * * a number — `psf`, computed in Python. This view never divides
+ *   `initial_ask` by a square footage (D5); a second implementation of $/sqft
+ *   is exactly the drift the architecture exists to remove.
+ * * **no sqft** — "we do not know how big this unit is". Those comps default
+ *   to weight 0 and are out of every median, so the badge is the only thing
+ *   that explains the row's silence (§7).
+ * * **verify sqft** — "we know what it says, and it looks wrong": the server
+ *   raised `sqft_suspect` because this comp's $/sqft is >30% off its own
+ *   cohort's median (F5-S1 AC6). Rendered as the Zillow link itself, because a
+ *   flag with no action attached is not the feature — RentCast ships no photos,
+ *   so Zillow is the verification path (spec §7).
+ */
+function PsfCell({ comp }: { comp: DerivedComp }) {
+  if (comp.psf === null) {
+    return (
+      <span
+        data-testid="comp-no-sqft"
+        className="text-grey whitespace-nowrap border border-grey px-1"
+        title="No square footage reported, so no $/sqft — excluded from every median by default. Re-include manually if you know the size."
+      >
+        no sqft
+      </span>
+    );
+  }
+  return (
+    <>
+      <span data-testid="comp-psf" className="whitespace-nowrap">
+        ${comp.psf.toFixed(2)}/sqft
+      </span>
+      {comp.sqft_suspect && (
+        <a
+          data-testid="comp-verify-sqft"
+          href={zillowHref(comp)}
+          target="_blank"
+          rel="noreferrer"
+          className="text-amber whitespace-nowrap border border-amber px-1"
+          title="This comp's $/sqft is far off its cohort's median — the reported square footage may be wrong, and a wrong sqft corrupts its premium. Check the listing on Zillow."
+        >
+          ⚑ verify sqft
+        </a>
+      )}
+    </>
+  );
+}
+
+/**
+ * The expanded row: everything §6.4 does not fit on three lines, plus the two
+ * external links that are the whole visual-inspection path.
+ *
+ * Per-row state, so expanding one row expands one row. A single `expandedKey`
+ * on the list would be the same feature with a shared piece of state and one
+ * more way for two rows to disagree.
+ */
+function CompDetail({ comp }: { comp: DerivedComp }) {
+  return (
+    <div data-testid="comp-detail" className="mt-1 ml-6 text-xs text-grey">
+      <p>
+        {comp.address}
+        {comp.unit ? ` #${comp.unit}` : ""} · ${whole(comp.initial_ask)}/mo ·{" "}
+        {comp.psf === null ? "no $/sqft" : `$${comp.psf.toFixed(2)}/sqft`} ·{" "}
+        {unit(comp.beds, "bd")} · {comp.baths === null ? "? ba" : unit(comp.baths, "ba")} ·{" "}
+        {comp.sqft === null ? "sqft unknown" : `${whole(comp.sqft)} sf`}
+      </p>
+      <p>
+        {comp.cohort_year} cohort · {comp.distance_mi.toFixed(2)} mi away ·{" "}
+        {outcomeText(comp)} · bucket {comp.bucket ?? "—"} · weight {comp.weight} ·{" "}
+        {comp.state}
+      </p>
+      <p className="flex gap-4 mt-1">
+        <a
+          data-testid="comp-zillow"
+          href={zillowHref(comp)}
+          target="_blank"
+          rel="noreferrer"
+          className="text-green underline"
+        >
+          Zillow (photos + listing history)
+        </a>
+        <a
+          data-testid="comp-streetview"
+          href={streetViewHref(comp)}
+          target="_blank"
+          rel="noreferrer"
+          className="text-green underline"
+        >
+          Street View (building condition)
+        </a>
+      </p>
+    </div>
   );
 }
 

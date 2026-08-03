@@ -18,7 +18,6 @@
       "cohort_year": 2026,
       "first_listed": "2026-02-13",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -38,7 +37,6 @@
       "cohort_year": 2024,
       "first_listed": "2024-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0

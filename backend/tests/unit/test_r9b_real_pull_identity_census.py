@@ -79,9 +79,17 @@ be the highest $/sqft in the pull (today's maximum is $4.18) and a premium of
 **+157%** against its cohort. The rule is right — a reported value beats an
 absent one and cannot invent a number — but on this pull the single comp it
 admits is one whose square footage looks wrong, and the flag designed to catch
-exactly that (`sqft_suspect`, ">30% off the cohort median") is not built and is
-hardcoded `False`. That is the owner FYI, and it is the PM's to relay, not
-QA's to decide.
+exactly that (`sqft_suspect`, ">30% off the cohort median") was not built.
+
+**F5-S1 BUILT IT (2026-08-03).** The flag is computed per request in
+`pipeline/premium.py` — `abs(premium) > 30%` against the same cohort median
+the premium reports against — and this comp raises it, so the row the owner
+keeps looking at now says "verify sqft". It is a *display* flag: the comp is
+still admitted, still in every median, and the human still makes the call
+(NORTH_STAR). Because the flag is per-request it is no longer a field on
+`StitchedComp` at all, which is why the assertions in this file measure the
+comp's `psf` and stop there — the flag is asserted where it lives, at
+`tests/api/test_f5s1_row_fields_on_the_wire.py`.
 """
 
 from __future__ import annotations
@@ -560,9 +568,19 @@ def test_the_comp_this_row_admits_is_the_pulls_most_extreme_psf(real_comps) -> N
     assert round(max(others), 2) == 4.18, (
         "the docstring's quoted figure, in the form it is quoted in"
     )
-    assert comp.sqft_suspect is False, (
-        "F5-S1's >30%-deviation flag is not built, so this comp enters unflagged. When F5-S1 "
-        "lands, this assertion should flip to True and this test's docstring should say so."
+    # F5-S1: `sqft_suspect` used to be asserted here, `False`, with a note
+    # saying it should flip to `True` when the flag was built. It was built —
+    # and building it moved the flag off `StitchedComp` entirely, because the
+    # cohort median it is measured against is taken over the SELECTED comps
+    # and therefore only exists per request. So there is nothing to assert on
+    # a shaped comp any more; the flip this note promised is asserted over the
+    # wire instead, on this same address:
+    # `tests/api/test_f5s1_row_fields_on_the_wire.py
+    #  ::test_the_leavitt_comp_raises_the_verify_sqft_flag`.
+    assert not hasattr(comp, "sqft_suspect"), (
+        "a shaping-time `sqft_suspect` came back. It cannot be answered at shaping time: the "
+        "cohort median it is measured against moves with the user's selection (F4-S5), so a "
+        "value stored here could only ever be a stale one"
     )
 
 

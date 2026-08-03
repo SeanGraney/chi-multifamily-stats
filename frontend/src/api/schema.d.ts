@@ -426,6 +426,8 @@ export interface components {
       from_price: number;
       /** To Price */
       to_price: number;
+      /** Day Offset */
+      day_offset?: number | null;
     };
     /**
      * DeriveMeta

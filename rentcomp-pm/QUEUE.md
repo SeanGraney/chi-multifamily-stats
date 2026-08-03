@@ -6,6 +6,10 @@
 
 **Planned spend (owner-authorized 2026-07-26, round 2):** broad diagnostic pull = **2 calls** (Active + Inactive): `daysOld=1:1095`, radius 2.0mi, `bedrooms=3:4` (owner-approved comp-pool expansion), propertyType `Multi-Family|Apartment|Townhouse|Single Family|Condo`, NO bathrooms filter, limit 500. Seasonal windowing applied locally to returned data; verdict on in-window distinct comps.
 
+**⭐ LIVE MODE AUTHORIZED — owner, 2026-08-03 (session 12).** The owner asked me to start the app for their own hands-on pass on this machine and, asked directly whether the pull stays frozen, answered **"Live calls authorized."** Server restarted with `RENTCOMP_LIVE=1`. **This is a standing authorization for the owner's own searches in this session, not for any agent** — no subagent gets live mode, and `execute-request` stays unused (PROJECT_MANAGER.md, "RentCast MCP").
+
+⚠ **Budget at authorization: 42 remaining.** One end-to-end prediction costs **~7 calls** (2 per cohort year + 1 per extra 500 records), so this is **5–6 predictions before the cap**, and a repeat search with identical parameters costs **zero**. ⚠ **Per the agreed 13c mitigation: verify the first real pull reports `complete`, then copy `~/.rentcomp/` — restore beats re-buy.** Actual spend to be reconciled into this ledger after the pass.
+
 **Deadline: 7/29/2026** — the tool must be able to price a real unit by this date. Working beats pretty; see `PROJECT_MANAGER.md`'s "Deadline awareness."
 
 Owned by the project manager. Every dispatch/completion/reorder is an edit here, committed to main. States: `BLOCKED · READY · DISPATCHED · IN_DEV · IN_REVIEW · REGRESSION · DONE`.

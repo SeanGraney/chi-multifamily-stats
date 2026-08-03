@@ -40,50 +40,97 @@
  * MONEY: zero live RentCast calls (D17, WORKFLOW.md §6). `RENTCOMP_LIVE` is
  * never set, `RENTCOMP_HOME` is a fresh temp dir, and the seeded pulls are
  * served from a temp fixtures directory by `support/seed-f1s2-home.py`.
+ *
+ * ===========================================================================
+ * PORT: EPHEMERAL, NOT 8000 — THIS FILE IS THE ACTUAL 2026-08-03 INCIDENT (row 44a)
+ * ===========================================================================
+ * This file used to spawn the `rentcomp` console script on the hardcoded
+ * `127.0.0.1:8000` with NO identity check at all. During F5-S1's QA verify,
+ * the owner's real `rentcomp` app server was up on 8000 for the owner's own
+ * use; this spec's spawn silently failed to bind, `waitForServer` polled 8000
+ * anyway and got the OWNER'S REAL SERVER, and `saveWorkspace()` below wrote
+ * two test-fixture files into the owner's real `~/.rentcomp/workspaces/`. No
+ * real data was overwritten (verified read-only afterward), but it is exactly
+ * the failure class row 44a exists to close, with a live victim. Moved to the
+ * WORKFLOW.md §2 ratified pattern — bind a free high port, spawn
+ * `rentcomp.app:app` directly under uvicorn, and check both that our own
+ * child process is still alive and that its startup banner names our port,
+ * before the first test and again after the last. Structurally impossible to
+ * repeat once this file never touches 8000 at all.
  */
 import { test, expect, type Page } from "@playwright/test";
 import { existsSync, mkdtempSync, rmSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import net from "node:net";
 import path from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { REPO_ROOT, NPM, NPM_NEEDS_SHELL } from "./support/local-server";
 
 const FRONTEND_DIR = path.join(REPO_ROOT, "frontend");
 const FRONTEND_DIST = path.join(FRONTEND_DIR, "dist");
-const BASE_URL = "http://127.0.0.1:8000"; // D7/__main__.py hardcodes 8000
 
 /**
  * The venv, which is NOT always under `REPO_ROOT`.
  *
- * `support/local-server.ts` resolves `<REPO_ROOT>/.venv`, and an isolated
- * worktree has no `.venv` of its own — CLAUDE.md is explicit that the repo-root
- * one is the project's ONLY Python environment. Resolved literally, every test
- * in this file sets a skip reason and the file exits 0 having verified nothing:
- * the same class of setup artifact WORKFLOW.md §2 documents for `NODE_PATH` and
- * `RENTCOMP_UI_DIR`, and the same false green. `RENTCOMP_VENV_DIR` is the third
- * door (found by F1-S2's QA, 2026-07-28; reported to the PM for §2).
+ * `support/local-server.ts` resolves `<REPO_ROOT>/.venv` (fixed under row
+ * 44a's Half C to also read `RENTCOMP_VENV_DIR` — see that file), and an
+ * isolated worktree has no `.venv` of its own — CLAUDE.md is explicit that the
+ * repo-root one is the project's ONLY Python environment. Resolved literally,
+ * every test in this file sets a skip reason and the file exits 0 having
+ * verified nothing: the same class of setup artifact WORKFLOW.md §2 documents
+ * for `NODE_PATH` and `RENTCOMP_UI_DIR`, and the same false green.
+ * `RENTCOMP_VENV_DIR` is the third door (found by F1-S2's QA, 2026-07-28;
+ * reported to the PM for §2). This file already resolved it inline before
+ * local-server.ts did, which is why local-server.ts's fix mirrors this.
  */
 const VENV_DIR = process.env.RENTCOMP_VENV_DIR ?? path.join(REPO_ROOT, ".venv");
 const VENV_BIN = path.join(VENV_DIR, process.platform === "win32" ? "Scripts" : "bin");
-const VENV_RENTCOMP = path.join(
-  VENV_BIN,
-  process.platform === "win32" ? "rentcomp.exe" : "rentcomp",
-);
 const VENV_PYTHON = path.join(
   VENV_BIN,
   process.platform === "win32" ? "python.exe" : "python",
 );
 
-test.describe.configure({ mode: "serial" });
+/** `pip install -e .` resolves against the MAIN checkout — without this a
+ * worktree run silently tests the wrong branch (WORKFLOW.md §2). */
+const BACKEND_SRC = path.join(REPO_ROOT, "backend", "src");
+
+/**
+ * NO `mode: "serial"` — removed under QUEUE row 44a (PM-authorised).
+ * `playwright.config.ts` already pins `workers: 1, fullyParallel: false`, so
+ * serial mode added nothing except "stop after the first failure"; nothing
+ * below depends on another test's state (each test either reads a fresh empty
+ * store or saves its own workspace(s) as its own arrange step).
+ */
 
 let serverProcess: ChildProcess | null = null;
 let rentcompHome: string | null = null;
 let setupFailure: string | null = null;
 let refs: string[] = [];
+let BASE_URL = "";
+let serverPort = 0;
+let serverLog = "";
+
+/** A port nothing is listening on right now, chosen by the OS. */
+async function freePort(): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (typeof address === "string" || address === null) {
+        probe.close(() => reject(new Error("could not resolve an ephemeral port")));
+        return;
+      }
+      const { port } = address;
+      probe.close(() => resolve(port));
+    });
+  });
+}
 
 async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (serverProcess && serverProcess.exitCode !== null) return false; // died on bind
     try {
       const res = await fetch(url);
       if (res.status < 500) return true;
@@ -93,6 +140,25 @@ async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 250));
   }
   return false;
+}
+
+/** "The server answering us is the one we started" (WORKFLOW.md §2). */
+function serverIdentityProblem(): string | null {
+  if (!serverProcess) return "no server process was ever spawned";
+  if (serverProcess.exitCode !== null) {
+    return (
+      `the server we spawned exited with code ${serverProcess.exitCode}, yet ${BASE_URL} ` +
+      "answered — every result in this run is about a DIFFERENT agent's build " +
+      `(WORKFLOW.md §2, port contention). Server output:\n${serverLog.slice(-800)}`
+    );
+  }
+  if (!serverLog.includes(`:${serverPort}`)) {
+    return (
+      `the server we spawned never announced port ${serverPort}. Output so far:\n` +
+      serverLog.slice(-800)
+    );
+  }
+  return null;
 }
 
 /** Save one curation state through the real API — no on-disk format assumed. */
@@ -126,9 +192,9 @@ function curation(ref: string, overrides: Record<string, unknown> = {}) {
 }
 
 test.beforeAll(async () => {
-  if (!existsSync(VENV_RENTCOMP)) {
+  if (!existsSync(VENV_PYTHON)) {
     setupFailure =
-      `${VENV_RENTCOMP} not found — expected \`pip install -e backend/\` into the repo-root ` +
+      `${VENV_PYTHON} not found — expected \`pip install -e backend/\` into the repo-root ` +
       "venv, or RENTCOMP_VENV_DIR pointing at it when running from a worktree";
     return;
   }
@@ -144,6 +210,8 @@ test.beforeAll(async () => {
     return;
   }
 
+  serverPort = await freePort();
+  BASE_URL = `http://127.0.0.1:${serverPort}`;
   rentcompHome = mkdtempSync(path.join(tmpdir(), "rentcomp-f1s2-home-"));
   const fixturesDir = path.join(rentcompHome, "e2e-fixtures");
   const env = {
@@ -158,7 +226,8 @@ test.beforeAll(async () => {
     // page these locators then race, which is how this spec first reported a
     // NEW SEARCH button that does not exist in any source file.
     RENTCOMP_UI_DIR: FRONTEND_DIST,
-  };
+  } as NodeJS.ProcessEnv;
+  delete env.RENTCAST_API_KEY; // D17: a live call must be impossible, not unlikely
 
   try {
     const seeded = execFileSync(
@@ -172,9 +241,20 @@ test.beforeAll(async () => {
     return;
   }
 
-  serverProcess = spawn(VENV_RENTCOMP, [], { cwd: REPO_ROOT, env, stdio: "pipe" });
+  const serverEnv = {
+    ...env,
+    PYTHONPATH: [BACKEND_SRC, env.PYTHONPATH].filter(Boolean).join(path.delimiter), // ';' on Windows
+  };
+  serverProcess = spawn(
+    VENV_PYTHON,
+    ["-m", "uvicorn", "rentcomp.app:app", "--host", "127.0.0.1", "--port", String(serverPort)],
+    { cwd: REPO_ROOT, env: serverEnv, stdio: "pipe" },
+  );
+  serverProcess.stdout?.on("data", (chunk) => (serverLog += chunk.toString()));
+  serverProcess.stderr?.on("data", (chunk) => (serverLog += chunk.toString()));
+
   if (!(await waitForServer(`${BASE_URL}/openapi.json`, 20_000))) {
-    setupFailure = "rentcomp server did not come up within 20s";
+    setupFailure = `server did not come up on ${BASE_URL} within 20s. Output:\n${serverLog.slice(-800)}`;
   }
 });
 
@@ -231,6 +311,14 @@ test.describe("F1 · Home", () => {
     // indistinguishable from a pass (WORKFLOW.md §2). If the build, the venv or
     // the server is broken, this file must go RED, not quiet.
     expect(setupFailure, "the F1-S2 E2E harness could not be stood up").toBeNull();
+    // The identity check itself (row 44a): this is the file that actually
+    // wrote to the owner's real ~/.rentcomp/workspaces/ on 2026-08-03 by
+    // trusting whatever answered on 8000. Fail loudly rather than silently
+    // exercising someone else's server.
+    expect(
+      serverIdentityProblem(),
+      "the server this spec is about to test is not the one it started",
+    ).toBeNull();
 
     const response = await page.goto(BASE_URL + "/");
     expect(response?.status(), "the built UI must be served from the running rentcomp").toBeLessThan(
@@ -343,4 +431,12 @@ test.describe("F1 · Home", () => {
       page.getByRole("button", { name: /refresh/i }).or(page.getByText(/refresh/i)).first(),
     ).toBeVisible();
   });
+});
+
+test("the server we tested against is still the one we started (checked again after the last test)", () => {
+  expect(
+    serverIdentityProblem(),
+    "the server identity changed partway through this run — everything above may have been " +
+      "answered by a different agent's build",
+  ).toBeNull();
 });

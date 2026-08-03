@@ -431,6 +431,15 @@ test.describe("F5-S1 — the comp row is §6.4's row", () => {
     // ⚠ `beds`, `baths` and `sqft` are on the wire and rendered NOWHERE today:
     // the unit a comp actually IS is currently invisible, which makes "is this
     // comparable to mine?" unanswerable from the list.
+    //
+    // ⚠ ONE FIELD AC3 NAMES IS NOT ASSERTED HERE, DELIBERATELY — QA RAISED IT
+    // WITH THE PM RATHER THAN GUESSING. AC3's list opens with "state", and it
+    // is ambiguous which state: §6.4's mock reads `INACTIVE · 3bd·2ba · ...`,
+    // which is the LISTING's status (off-market), while `DerivedComp.state` is
+    // the CURATION status (included/excluded/filtered) — and the curation
+    // status is already on line 1, as the checkbox. Asserting the wrong one
+    // would force the developer to build the wrong thing. Everything else AC3
+    // names is asserted below; this row is pending the PM's ruling.
     const payload = await gotoResults(page);
     const comp = findComp(
       payload,

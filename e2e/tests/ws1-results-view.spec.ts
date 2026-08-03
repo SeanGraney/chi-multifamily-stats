@@ -298,6 +298,84 @@ test.describe("WS-1 — a real derive round-trips and Results renders real data"
     ).toBe(true);
   });
 
+  test("the bucket table also shows the DOM min–max range and the censored-floors list, not just the median (F10-S1 §150)", async ({ page }) => {
+    // Grounded in the ACTUAL /api/derive response, not an assumed markup —
+    // per the split rule (AGENT_QA.md), L1/L2 already pin the exact values
+    // (test_ws1_bucket_outcome_stats.py, test_derive_contract.py); this test
+    // only needs to prove the wiring: that a bucket carrying a real
+    // leased_dom_min/max distinct from its median, and a bucket carrying a
+    // real censored floor, both surface SOMEWHERE on the page. §150 names
+    // five per-bucket items — count, leased-only DOM median, DOM min–max,
+    // cut-before-lease rate, censored-floors list — and only three of them
+    // (count, median, cut-rate) are wired into <BucketTable> today.
+    const derivePromise = page.waitForResponse(
+      (res) => res.url().includes("/api/derive") && res.request().method() === "POST"
+    );
+    await gotoResults(page);
+    const response = await derivePromise;
+    const derived = await response.json();
+
+    const buckets: Array<{
+      id: string;
+      leased_dom_min: number | null;
+      leased_dom_max: number | null;
+      censored_floors: number[];
+    }> = derived.buckets;
+
+    const bucketWithRange = buckets.find(
+      (b) => b.leased_dom_min !== null && b.leased_dom_max !== null && b.leased_dom_min !== b.leased_dom_max
+    );
+    const bucketWithCensoredFloor = buckets.find((b) => b.censored_floors.length > 0);
+
+    expect(
+      bucketWithRange,
+      "expected at least one bucket in the real ws1-real derive to carry a distinct " +
+        "leased_dom_min/leased_dom_max — if this fails, the fixture itself can't prove the point"
+    ).toBeTruthy();
+    expect(
+      bucketWithCensoredFloor,
+      "expected at least one bucket in the real ws1-real derive to carry a non-empty " +
+        "censored_floors list — if this fails, the fixture itself can't prove the point"
+    ).toBeTruthy();
+
+    // Scoped to the actual bucket-table ROW, never bare `body` text — a loose
+    // page-wide substring match would false-pass on an unrelated number (a
+    // comp's rent, DOM, or distance) that happens to share digits with a
+    // bucket's min/max/floor. Every row in <BucketTable> starts with its
+    // bucket id as the first cell (Results.tsx `<td>{bucket.id}</td>`).
+    const bucketsSection = page.locator("table", { hasText: "Leased DOM" }).first();
+    await expect(bucketsSection, "no bucket table found on the page at all").toBeVisible({
+      timeout: 10_000,
+    });
+
+    async function rowTextFor(bucketId: string): Promise<string> {
+      const row = bucketsSection.locator("tr", { hasText: bucketId }).first();
+      return (await row.innerText().catch(() => "")) || "";
+    }
+
+    if (bucketWithRange) {
+      const minStr = String(bucketWithRange.leased_dom_min);
+      const maxStr = String(bucketWithRange.leased_dom_max);
+      const rowText = await rowTextFor(bucketWithRange.id);
+      expect(
+        rowText.includes(minStr) && rowText.includes(maxStr),
+        `expected the "${bucketWithRange.id}" bucket's OWN row to show its DOM min (${minStr}) and ` +
+          `max (${maxStr}) — §150 requires "leased-only DOM median + min–max", and today's ` +
+          `<BucketTable> row reads "${rowText}", which has only the median`
+      ).toBe(true);
+    }
+    if (bucketWithCensoredFloor) {
+      const floorStrs = bucketWithCensoredFloor.censored_floors.map(String);
+      const rowText = await rowTextFor(bucketWithCensoredFloor.id);
+      expect(
+        floorStrs.some((f) => rowText.includes(f)),
+        `expected the "${bucketWithCensoredFloor.id}" bucket's OWN row to show at least one censored ` +
+          `floor (${floorStrs.join(", ")}) — §150 requires a "censored-floors list" per bucket, and ` +
+          `today's <BucketTable> row reads "${rowText}", which has no censored-floors list at all`
+      ).toBe(true);
+    }
+  });
+
   test("the price-test panel renders the insufficient-evidence guard state, not a curve", async ({ page }) => {
     const derivePromise = page.waitForResponse(
       (res) => res.url().includes("/api/derive") && res.request().method() === "POST"

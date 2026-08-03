@@ -109,6 +109,24 @@ class Cut(BaseModel):
     on: date
     from_price: float
     to_price: float
+    #: Whole days between the chain's first listing and this cut — the *"day
+    #: 21"* in §6.4's row copy `✂ 2,150 → 2,050 (day 21)`, and the reason the
+    #: date beside it is never subtracted anywhere else. A cut on day 3 and a
+    #: cut on day 90 mean opposite things about how the asking price was
+    #: received, so the row cannot print the cut without it.
+    #:
+    #: A **count, not a second date**, for the same two reasons
+    #: `days_since_removal` is (see `DerivedComp`): computing it in the view
+    #: would be a derivation D5 puts in Python, and in JavaScript it would be
+    #: date arithmetic across a timezone boundary, which D15 keeps out of this
+    #: codebase entirely.
+    #:
+    #: `None` — never 0, which would read as "cut on the day it listed" — when
+    #: the comp carries no `first_listed` to measure from. `shape_raw_pull`
+    #: always sets it, so on real evidence this is never null; a hand-built or
+    #: pre-shaped `StitchedComp` has none, which is exactly row 10b's shape,
+    #: and the row renders the cut without its day rather than *"day nulld"*.
+    day_offset: int | None = None
 
 
 class DerivedComp(BaseModel):

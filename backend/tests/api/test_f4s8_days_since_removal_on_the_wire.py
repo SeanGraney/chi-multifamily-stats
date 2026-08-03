@@ -38,7 +38,6 @@ _SHARED = {
     "initial_ask": 2000.0,
     "cohort_year": 2026,
     "withdrawal_suspect": False,
-    "sqft_suspect": False,
     "cut_history": [],
     "relist_count": 0,
     "gap_days": 0,

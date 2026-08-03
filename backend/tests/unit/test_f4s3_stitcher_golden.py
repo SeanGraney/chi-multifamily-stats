@@ -123,7 +123,6 @@ _SEMANTIC_FIELDS = (
     "baths",
     "lat",
     "lng",
-    "sqft_suspect",
 )
 
 

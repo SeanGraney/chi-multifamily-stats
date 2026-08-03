@@ -125,9 +125,15 @@ class StitchedComp(BaseModel):
     #: without going through `shape_raw_pull` — real shaping always sets it.
     first_listed: date | None = None
     withdrawal_suspect: bool = False
-    #: $/sqft >30% off the cohort median (F5-S1 computes it; carried here so
-    #: the graph can surface it without re-deriving it per request).
-    sqft_suspect: bool = False
+    # NO `sqft_suspect` HERE, DELIBERATELY — F5-S1 removed it (PM ruling R2).
+    # It sat here promising "carried so the graph can surface it without
+    # re-deriving it per request", and that promise is now false: the flag is
+    # `abs(premium) > 30%` against a cohort median taken over the SELECTED
+    # comps (F4-S5 [INVARIANT]), so it MUST be re-derived per request and it
+    # lives in `pipeline/premium.py` beside the premium it restates. A field
+    # that could only ever have held a stale answer is worse than no field —
+    # it is the shape row 10b was raised to clear. `DerivedComp.sqft_suspect`
+    # (the wire) is unchanged; only this shaping-time copy is gone.
     cut_history: tuple[PriceCut, ...] = ()
     relist_count: int = Field(default=0, ge=0)
     gap_days: int = Field(default=0, ge=0)

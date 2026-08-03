@@ -18,7 +18,6 @@
       "cohort_year": 2025,
       "first_listed": "2025-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -38,7 +37,6 @@
       "cohort_year": 2025,
       "first_listed": "2025-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -58,7 +56,6 @@
       "cohort_year": 2025,
       "first_listed": "2025-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -78,7 +75,6 @@
       "cohort_year": 2025,
       "first_listed": "2025-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -98,7 +94,6 @@
       "cohort_year": 2025,
       "first_listed": "2025-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -118,7 +113,6 @@
       "cohort_year": 2024,
       "first_listed": "2024-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -138,7 +132,6 @@
       "cohort_year": 2024,
       "first_listed": "2024-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -158,7 +151,6 @@
       "cohort_year": 2024,
       "first_listed": "2024-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -178,7 +170,6 @@
       "cohort_year": 2023,
       "first_listed": "2023-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -198,7 +189,6 @@
       "cohort_year": 2023,
       "first_listed": "2023-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -218,7 +208,6 @@
       "cohort_year": 2023,
       "first_listed": "2023-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -238,7 +227,6 @@
       "cohort_year": 2022,
       "first_listed": "2022-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -258,7 +246,6 @@
       "cohort_year": 2022,
       "first_listed": "2022-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -278,7 +265,6 @@
       "cohort_year": 2022,
       "first_listed": "2022-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0
@@ -298,7 +284,6 @@
       "cohort_year": 2021,
       "first_listed": "2021-12-31",
       "withdrawal_suspect": false,
-      "sqft_suspect": false,
       "cut_history": [],
       "relist_count": 0,
       "gap_days": 0

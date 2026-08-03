@@ -60,7 +60,6 @@ _SHARED = {
     "sqft": 1000.0,
     "initial_ask": 2000.0,
     "cohort_year": 2026,
-    "sqft_suspect": False,
     "relist_count": 0,
     "gap_days": 0,
 }

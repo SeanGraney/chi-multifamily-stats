@@ -1344,7 +1344,9 @@ function BucketTable({ buckets }: { buckets: DerivedState["buckets"] }) {
             <th className="pr-4 text-left">Bucket</th>
             <th className="pr-4 text-left">Count</th>
             <th className="pr-4 text-left">Leased DOM (median)</th>
+            <th className="pr-4 text-left">Leased DOM (min–max)</th>
             <th className="pr-4 text-left">Cut-before-lease rate</th>
+            <th className="pr-4 text-left">Censored floors</th>
           </tr>
         </thead>
         <tbody>
@@ -1356,9 +1358,17 @@ function BucketTable({ buckets }: { buckets: DerivedState["buckets"] }) {
                 {bucket.leased_dom_median === null ? "—" : `${bucket.leased_dom_median} days`}
               </td>
               <td className="pr-4">
+                {bucket.leased_dom_min === null || bucket.leased_dom_max === null
+                  ? "—"
+                  : `${bucket.leased_dom_min}–${bucket.leased_dom_max} days`}
+              </td>
+              <td className="pr-4">
                 {bucket.cut_before_lease_rate === null
                   ? "—"
                   : `${(bucket.cut_before_lease_rate * 100).toFixed(0)}%`}
+              </td>
+              <td className="pr-4">
+                {bucket.censored_floors.length === 0 ? "—" : bucket.censored_floors.join(", ")}
               </td>
             </tr>
           ))}

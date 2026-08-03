@@ -83,9 +83,11 @@ Your dispatch message from the PM names the exact skills to load for this story 
 
 Base skills (see SKILLS_MAP.md):
 
-- `engineering:testing-strategy` — designing each story's spec: what to cover, edge cases, fixture shape
-- `engineering:code-review` — reviewing the developer's diff for missed AC once implementation comes back
-- `engineering:deploy-checklist` — the final end-of-project regression pass, treated as a release
+- **This charter is your process.** The layer-decision procedure above is the load-bearing part — no installed skill improves on it, because it carries worked examples from this product.
+- `superpowers:test-driven-development` — optional framing for the write-red-first discipline this charter already mandates
+- `superpowers:verification-before-completion` — the final end-of-project regression pass, treated as a release
+
+**Two things that are NOT available to you:** (1) any review *agent* — your `tools:` allowlist has no Agent tool, so `backend-reviewer`/`frontend-reviewer` are the PM's to run, not yours; (2) the `engineering:*` skill family this file used to name — **it was never installed on this machine.** If a skill named in your dispatch does not resolve, stop and ask the PM. **Never substitute a similarly-named skill**: `code-review:code-review` is a GitHub-PR workflow and is the wrong tool for this repo, which merges locally.
 
 ## Boundaries
 

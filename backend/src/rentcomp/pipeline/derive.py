@@ -50,6 +50,7 @@ from rentcomp.models.domain import StitchedComp
 from rentcomp.models.requests import DeriveRequest
 from rentcomp.models.responses import (
     Band,
+    Basis,
     Breakdown,
     CohortCount,
     Cut,
@@ -57,10 +58,11 @@ from rentcomp.models.responses import (
     DeriveMeta,
     DerivedState,
     DerivedWarning,
+    PartialPullInfo,
 )
 from rentcomp.pipeline.anchor import anchor as anchor_stage
 from rentcomp.pipeline.buckets import bucket_of, bucket_stats
-from rentcomp.pipeline.cohorts import cohort_medians, median_by_year
+from rentcomp.pipeline.cohorts import basis_by_year, cohort_medians, median_by_year
 from rentcomp.pipeline.keys import disambiguate_keys
 from rentcomp.pipeline.membership import classify_membership, distances_mi
 from rentcomp.pipeline.premium import compute_premiums
@@ -83,16 +85,27 @@ __all__ = [
 DRIFT_SENSITIVITY_PTS = 2.0
 
 #: Bumped when the derivation changes in a way that changes output values.
-#: WS-1 replaces record shaping (F4-S3/S4/S8), the anchor (F8-S1), bucket
+#: WS-1 replaced record shaping (F4-S3/S4/S8), the anchor (F8-S1), bucket
 #: outcome stats (F10-S1) and kNN retrieval (F11-S1) with real
-#: implementations, so the `-stubs` marker (and the `stub_stage` warnings
-#: that went with it) retire here. What remains genuinely unbuilt — the
-#: Kaplan-Meier curve (F11-S2) and F11-S3's guard-vs-curve branch selection —
-#: is not a stubbed *number* the way the others were: the price test always
-#: returns the guard branch (`GuardResult`), which is the honest terminal
-#: state NORTH_STAR names for evidence this thin, not a placeholder standing
-#: in for a curve. See `pipeline/pricetest.py`.
-PIPELINE_VERSION = "0.1.0-ws1"
+#: implementations, retiring the `-stubs` marker and the `stub_stage`
+#: warnings that went with it. F11-S2 supplies the last missing arm of the
+#: price test: the Kaplan-Meier curve now exists, so a well-evidenced
+#: candidate returns a `CurveResult` instead of a guard that had no curve to
+#: offer. That changes real output values, hence the bump. F11-S3 still owns
+#: the guard's trip *thresholds*. See `pipeline/pricetest.py`.
+#:
+#: F4-S8 adds `DerivedComp.days_since_removal`, so a payload from this build
+#: is not interchangeable with one from the last — which is the whole point of
+#: reporting a version. Bumping is free of collateral damage by construction:
+#: `PIPELINE_VERSION` deliberately does **not** enter the cache key (F3-S1,
+#: `test_a_pipeline_version_bump_does_not_change_the_key`), so a release never
+#: evicts a pull the user paid for.
+#:
+#: F4-S5 makes the thin-cohort fallback real: a cohort with fewer than
+#: `min_cohort_size` selected comps now takes its median over the pulled set,
+#: so premiums in thin cohorts change value. That is a change in output
+#: numbers, not just in fields, hence the bump.
+PIPELINE_VERSION = "0.1.0-f4s5"
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +122,18 @@ class DeriveContext:
     pull_ref: str = ""
     pull_digest: str = ""
     config_digest: str = ""
+    #: The gap in this pull's evidence, if it has one (F4-S9). Read off the
+    #: pull's manifest at the edge, like `as_of` — the pipeline never looks at
+    #: a file, and "which windows are missing" is not something it could
+    #: recompute from the comps it was handed.
+    partial_pull: PartialPullInfo | None = None
+    #: `ShapingSummary.dropped_outside_window` for this pull — chains the date
+    #: window discarded (F4-S4), carried through so F4-S6's empty state can say
+    #: which constraint bound. Like `partial_pull` it is a fact about *how this
+    #: evidence was assembled*, which the pipeline cannot recompute from the
+    #: comps it was handed: post-window comps carry no trace of the ones the
+    #: window removed. `None` for a pull with no shaping stage behind it.
+    dropped_outside_window: int | None = None
 
 
 def drift_band(drift_pct: float, sensitivity_pts: float) -> Band[float]:
@@ -141,6 +166,14 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
 
     cohorts = cohort_medians(keys, psfs, years, weights, included, cfg.min_cohort_size)
     premiums = compute_premiums(psfs, years, median_by_year(cohorts))
+    # F4-S5: a premium's basis is its own cohort's basis, read off the same
+    # `CohortStat` the median came from — so a row can never be labelled with a
+    # provenance its cohort does not have.
+    bases = basis_by_year(cohorts)
+    premium_bases = [
+        None if premium is None else bases[year]
+        for premium, year in zip(premiums, years, strict=True)
+    ]
     comp_buckets = [bucket_of(premium, cfg.bucket_half_width_pct) for premium in premiums]
 
     drift = drift_band(req.drift_pct, DRIFT_SENSITIVITY_PTS)
@@ -160,16 +193,20 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
         included,
         cfg.knn_k,
         cfg.bucket_half_width_pct,
+        cfg.km_horizons_days,
     )
 
     contributions = contribution_shares(weights, included)
     derived_comps = [
-        _derived_comp(comp, key, psf, premium, bucket, distance, weight, share, state)
-        for comp, key, psf, premium, bucket, distance, weight, share, state in zip(
+        _derived_comp(
+            comp, key, psf, premium, basis, bucket, distance, weight, share, state, ctx.as_of
+        )
+        for comp, key, psf, premium, basis, bucket, distance, weight, share, state in zip(
             comps,
             keys,
             psfs,
             premiums,
+            premium_bases,
             comp_buckets,
             distances,
             weights,
@@ -178,7 +215,7 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
             strict=True,
         )
     ]
-    breakdown = _breakdown(comps, keys, psfs, years, states)
+    breakdown = _breakdown(comps, keys, psfs, years, states, ctx.dropped_outside_window)
 
     return DerivedState(
         comps=derived_comps,
@@ -195,7 +232,11 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
             config_digest=ctx.config_digest,
             pipeline_version=PIPELINE_VERSION,
             config=cfg,
-            partial_pull=None,  # D24/F4-S6 names the gap; F0-S2 pulls are whole.
+            # D24/§5a: a gap in the evidence is carried in the same payload as
+            # the numbers computed from it. `None` means "no gap", never "not
+            # known" — a pull with no manifest record (a synthetic fixture) is
+            # whole by construction.
+            partial_pull=ctx.partial_pull,
         ),
     )
 
@@ -205,12 +246,28 @@ def _derived_comp(
     key: str,
     psf: float | None,
     premium: float | None,
+    premium_basis: Basis | None,
     bucket: str | None,
     distance: float,
     weight: float,
     share: float | None,
     state: str,
+    as_of: date,
 ) -> DerivedComp:
+    """One comp on the wire.
+
+    `as_of` arrives as an argument like every other input (there is no clock
+    below the API edge — see this module's docstring). It is used for exactly
+    one thing: `days_since_removal`, the same subtraction `pipeline/shape.py`
+    already classified the comp by, restated as a number the row can print.
+
+    `shape.py` measured `as_of − the chain's final removal`; `removed_on`
+    reconstructs that same day from the `effective_dom` that measurement
+    produced. So the rung and the figure beside it cannot disagree about when
+    the unit left the market — pinned directly, at both ends, by
+    `tests/unit/test_f4s8_removed_on.py`.
+    """
+    removed_on = comp.removed_on
     return DerivedComp(
         key=key,
         address=comp.address,
@@ -223,13 +280,12 @@ def _derived_comp(
         initial_ask=comp.initial_ask,
         psf=psf,
         premium=premium,
-        # F4-S5 owns the fallback to the pulled-set median; until then every
-        # premium that exists came from the selected set.
-        premium_basis="selected" if premium is not None else None,
+        premium_basis=premium_basis,
         cohort_year=comp.cohort_year,
         effective_dom=comp.effective_dom,
         censored=comp.censored,
         removal_class=comp.removal_class,
+        days_since_removal=None if removed_on is None else (as_of - removed_on).days,
         withdrawal_suspect=comp.withdrawal_suspect,
         sqft_suspect=comp.sqft_suspect,
         cut_history=[
@@ -252,6 +308,7 @@ def _breakdown(
     psfs: Sequence[float | None],
     years: Sequence[int],
     states: Sequence[str],
+    dropped_outside_window: int | None,
 ) -> Breakdown:
     """Counts and their evidence, from one pass over one set of labels.
 
@@ -307,6 +364,10 @@ def _breakdown(
         missing_sqft=len(by_count["missing_sqft"]),
         per_cohort=per_cohort,
         comp_keys=by_count,
+        # Passed straight through from the shaping stage, never recounted here:
+        # the comps this function sees are exactly the ones the window KEPT, so
+        # nothing in this scope could reconstruct what it dropped.
+        dropped_outside_window=dropped_outside_window,
     )
 
 
@@ -324,12 +385,25 @@ def _warnings(
 
     The `provisional_field` entries (WS-1a, ADR-002 finding 5) are the same
     self-documenting convention applied to individual FIELDS rather than
-    whole stages: `sqft_suspect`, `premium_basis`, and `partial_pull` are all
-    honest defaults for what this pipeline actually computes today, not
-    placeholders standing in for a real number — but nothing signals they are
-    provisional until F5-S1/F4-S5/F4-S6 build the real computation each one
-    is a stand-in for. Each warning is unconditional (every derive carries
-    all three) and each disappears independently as its own story lands.
+    whole stages: `sqft_suspect` is an honest default for what this pipeline
+    actually computes today, not a placeholder standing in for a real number —
+    but nothing signals it is provisional until F5-S1 builds the real
+    computation it is a stand-in for. Each warning is unconditional and each
+    disappears independently as its own story lands.
+
+    **`premium_basis`'s entry is retired here (F4-S5).** It is no longer
+    always `"selected"`: a cohort below `min_cohort_size` falls back to the
+    pulled-set median and every comp in it reports `premium_basis="pulled"`,
+    so the field now names which set the median behind each premium actually
+    came from. A `provisional_field` warning for a value that *is* computed is
+    a false warning, and false warnings are how the real ones stop being read.
+
+    **`partial_pull`'s entry is retired here (F4-S9).** It is no longer a
+    placeholder: the orchestrator records which planned windows never arrived
+    in the pull's manifest, and the edge hands that to `DeriveContext`, so
+    `None` now means "this pull has no gap" rather than "nobody has looked".
+    That was the whole point of the convention — the story that makes a
+    placeholder real clears its own warning.
     """
     warnings: list[DerivedWarning] = [
         DerivedWarning(
@@ -337,20 +411,6 @@ def _warnings(
             message=(
                 "sqft_suspect is always false — the >30% cohort-median $/sqft deviation "
                 "flag (F5-S1) is not built yet."
-            ),
-        ),
-        DerivedWarning(
-            code="provisional_field",
-            message=(
-                "premium_basis is always \"selected\" — the pulled-set fallback for thin "
-                "cohorts (F4-S5) is not built yet."
-            ),
-        ),
-        DerivedWarning(
-            code="provisional_field",
-            message=(
-                "partial_pull is always null — gap tracking for incomplete pulls "
-                "(F4-S6/D24) is not built yet."
             ),
         ),
     ]

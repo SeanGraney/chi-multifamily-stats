@@ -35,11 +35,12 @@ rounded at display only (D14).
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from rentcomp.models.requests import DeriveRequest, SearchParams, Subject
 from rentcomp.storage.config import Config
 
 __all__ = [
@@ -48,6 +49,7 @@ __all__ = [
     "Breakdown",
     "BucketStat",
     "CohortCount",
+    "CohortPlan",
     "CohortStat",
     "CurveResult",
     "Cut",
@@ -63,6 +65,10 @@ __all__ = [
     "Neighbor",
     "PartialPullInfo",
     "PriceTest",
+    "RecentWorkspace",
+    "SearchPlan",
+    "SearchResult",
+    "Workspace",
 ]
 
 T = TypeVar("T")
@@ -74,7 +80,7 @@ BucketId = Literal["below", "at", "above"]
 #: ARCHITECTURE.md §3's `leased` spelling is an erratum (PM ruling, F0-S2).
 RemovalClass = Literal["pending", "provisional", "confirmed"]
 
-#: Which set a median was computed over (F4-S4's thin-cohort fallback).
+#: Which set a median was computed over (F4-S5's thin-cohort fallback).
 Basis = Literal["selected", "pulled"]
 
 
@@ -140,6 +146,33 @@ class DerivedComp(BaseModel):
     censored: bool
     #: `None` iff censored — a still-active listing has not been removed.
     removal_class: RemovalClass | None
+    #: Whole days between this comp's final removal and the pull date — the
+    #: number `removal_class` was decided by, and the "4d" in F4-S8's row copy
+    #: *"removed 4d — classifying"*. `None` iff `removal_class` is `None`.
+    #:
+    #: That "iff" is a **pipeline guarantee, not a type-system one**, and it
+    #: holds because `shape.py::_build_comp` always sets
+    #: `StitchedComp.first_listed` and derives `removal_class` from the same
+    #: chain end that decides `censored` — so `removed_on` answers `None`
+    #: exactly when `removal_class` is `None`. A comp assembled any other way
+    #: can break it, and every pre-shaped synthetic fixture did until row 10b:
+    #: they stated a rung on a comp that never said when it was listed, so the
+    #: row rendered *"removed nulld — classifying"* on the very pull the
+    #: Layer-2 suite derives against. What keeps that from returning is
+    #: `backend/tests/unit/test_r10b_preshaped_pulls_are_shapeable.py` —
+    #: read it before adding a pre-shaped pull.
+    #:
+    #: A **count, not a date**, deliberately. `removed_on` alone would leave
+    #: the view subtracting it from `meta.as_of` — a derivation the view is not
+    #: allowed to perform (D5) and, in JS, date arithmetic across a timezone
+    #: boundary, which D15 keeps out of this codebase entirely. Shipping the
+    #: difference means the only client-side step left is formatting.
+    #:
+    #: Carried for **every** removed comp, not only pendings: it is a plain
+    #: fact about the comp, and a field that existed only in one state would
+    #: make the row's rendering branch on a field's presence rather than on the
+    #: ladder rung it is displaying.
+    days_since_removal: int | None
     withdrawal_suspect: bool
     sqft_suspect: bool
 
@@ -174,10 +207,19 @@ class CohortStat(BaseModel):
     year: int
     selected_count: int
     pulled_count: int
+    #: Taken over the set `basis` names: the selected comps, or — when the
+    #: cohort is `thin` — all *pulled* comps in the year, each counting once
+    #: (F4-S5 [INVARIANT]).
     median_psf: float | None
     basis: Basis | None
-    #: `selected_count < min_cohort_size` (F4-S4 owns what happens next).
+    #: `selected_count < min_cohort_size`, and therefore also the condition
+    #: under which `basis` is `"pulled"`. F8-S3 renders the rail warning off
+    #: this plus the two counts — `basis` alone does not say *how* thin, and a
+    #: 3-of-5 cohort and a 1-of-1 cohort report the identical flag.
     thin: bool
+    #: The user's own selected evidence for this year, always — so a comp at
+    #: weight 0 is cited by no evidence list (F5-S2 [INVARIANT]) even while a
+    #: thin cohort's median is taken over the wider pulled set.
     comp_keys: list[str]
 
 
@@ -323,15 +365,16 @@ class GuardResult(BaseModel):
     candidate_rent: float
     candidate_premium: Band[float]
     bucket: BucketId
-    #: WS-1a: `curve_not_available` is a provisional third value, not an
-    #: F11-S3 trip reason. F11-S3's real trip rule is untouched (<3 usable
-    #: neighbors in range, or all censored) — but when neither holds, this
-    #: endpoint still has no `CurveResult` to return (F11-S2 doesn't exist
-    #: yet), and reporting one of the other two literals in that case would
-    #: be a stated reason with no evidence behind it (NORTH_STAR). This value
-    #: retires the moment F11-S2/F11-S3's guard-vs-curve branch selection
-    #: lands for real — the same provisional-marker convention as
-    #: `DerivedWarning(code="provisional_field")`.
+    #: WS-1a: `curve_not_available` was a provisional third value, not an
+    #: F11-S3 trip reason. It named the one state the wire contract could not
+    #: express — F11-S3's real trip rule did not fire, but there was no
+    #: `CurveResult` to return either, because F11-S2 did not exist.
+    #:
+    #: **F11-S2 has landed and nothing produces this value any more.** The
+    #: literal is still here only because removing it is a wire-contract
+    #: change that regenerates the TS types (D12); F11-S3 retires it along
+    #: with the codegen when it takes ownership of the trip thresholds.
+    #: Nothing may start emitting it again.
     reason: Literal["too_few_in_range", "all_censored", "curve_not_available"]
     neighbors: list[Neighbor]
 
@@ -371,6 +414,33 @@ class Breakdown(BaseModel):
     missing_sqft: int
     per_cohort: list[CohortCount]
     comp_keys: dict[str, list[str]]
+
+    #: Chains this pull bought and the **date window** then threw away —
+    #: F4-S4's `ShapingSummary.dropped_outside_window`, on the wire since F4-S6.
+    #:
+    #: WHY IT IS HERE AND WHAT IT IS NOT PART OF. `included + excluded +
+    #: filtered == pulled` is F7-S1's [INVARIANT] and is measured over
+    #: *post-window* comps; this number counts chains that never reached that
+    #: population, so it is deliberately outside that identity and must stay
+    #: outside it. It is reported beside the identity, not folded into it.
+    #:
+    #: WHY IT IS ON THE WIRE AT ALL. F4-S6's empty state has to "name the
+    #: binding constraint", and `pulled == 0` cannot: a search that the source
+    #: answered with nothing and a search whose every record fell outside the
+    #: date window are the same zero, and they ask the user for opposite
+    #: actions (widen the radius vs. widen the window). Spec §3.2 pads every
+    #: query ±90 days, so on the committed real pull a 16-day June window keeps
+    #: 28 chains and drops 539 — 95% of what the pull paid for is discarded
+    #: here by design, and a drop that leaves no trace makes "your market is
+    #: thin" and "your window is narrow" indistinguishable. (F4-S4's PM ruling
+    #: kept this off the wire; F4-S6 is the story that gave it a surface, which
+    #: is the condition that ruling was waiting on.)
+    #:
+    #: `None` — never 0 — when the pull was not shaped from raw records: a
+    #: pre-shaped synthetic fixture has no window stage behind it, so it has no
+    #: honest count to report. "We did not measure" and "we measured zero" are
+    #: different claims and the empty state branches on the difference.
+    dropped_outside_window: int | None = None
 
 
 class DerivedWarning(BaseModel):
@@ -444,3 +514,152 @@ class DerivedState(BaseModel):
     breakdown: Breakdown
     warnings: list[DerivedWarning]
     meta: DeriveMeta
+
+
+class SearchResult(BaseModel):
+    """What `POST /api/search` answers (F4-S9) — the outcome of a pull.
+
+    No comps: evidence is addressed by reference (`pull_ref`) and fetched by
+    `POST /api/derive`, the same reason `DeriveRequest` carries a ref rather
+    than an uploaded comp list (ADR-001 §1.1).
+
+    The cost fields exist so the user can never be surprised by a spend:
+    `estimated_calls` is what a full (re)pull of this search costs,
+    `calls_spent` is what this request actually cost, and `calls_to_complete`
+    is what finishing an incomplete pull would cost. All three count the same
+    unit — one fetchable query — so F2-S3's [INVARIANT] ("the number displayed
+    and the number spent are one number") holds across the whole flow.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: The ref `POST /api/derive` resolves. A function of the search params
+    #: alone, so an identical search always addresses the same evidence.
+    pull_ref: str
+    #: What was already on disk when this search arrived: `miss` (nothing),
+    #: `hit` (a whole pull), `stale` (an entry with a gap in it). F3-S2's
+    #: modal branches on this to offer USE CACHED vs REFRESH.
+    cache_status: Literal["hit", "miss", "stale"]
+    #: `len(fetchable_queries(plan))` — what a full pull of this search costs.
+    #: Structurally-empty windows are planned and never sent, so they are
+    #: never billed to the user in an estimate either (F4-S1 AC4).
+    estimated_calls: int
+    #: Calls this request spent. Zero in fixture mode and zero when the
+    #: evidence was already on disk.
+    calls_spent: int
+    complete: bool
+    #: One label per window that never arrived ("2025 Inactive"), so a gap can
+    #: be named rather than merely counted (D24 §5a).
+    missing: list[str]
+    calls_to_complete: int
+
+
+class CohortPlan(BaseModel):
+    """One cohort year in a planned pull, and whether it can be fetched.
+
+    `fetchable` is false for a window that has not opened yet — the planner
+    emits it anyway, and so does this, because "silently absent" and "planned
+    but empty" are different things to a user checking whether their date
+    window is the one they meant (`client/planner.py`). It costs nothing, so
+    it is never billed either (F4-S1 AC4).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    year: int
+    fetchable: bool
+
+
+class SearchPlan(BaseModel):
+    """What `POST /api/search/plan` answers (F2-S3) — the cost of a search,
+    before anyone has agreed to pay it.
+
+    Spec §6.3's preview line, as data: *"Jun 15–30 · 2026, 2025 (2 cohorts) ·
+    est. N API calls."* Every part of that sentence is a backend fact here,
+    including the cohort years — D5/D13 make the SPA a renderer, and a frontend
+    reconstructing the year set by subtracting from `new Date()` would be a
+    second implementation of the planner's calendar rules.
+
+    Deliberately the same field *names* as the overlapping half of
+    `SearchResult`, because they are the same facts about the same search: a
+    preview whose `estimated_calls` or `pull_ref` did not match the submit's
+    would be worse than no preview at all.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: F3-S1's cache key for these params — what the form hands to F3-S2's
+    #: modal and, after submit, to `POST /api/derive`. Identical to the ref
+    #: `POST /api/search` resolves for the same body.
+    pull_ref: str
+    #: `miss` (nothing on disk), `hit` (a whole pull), `stale` (an entry with
+    #: a gap). This is what lets the form route to the cache modal on submit
+    #: without asking the route that pulls.
+    cache_status: Literal["hit", "miss", "stale"]
+    #: `len(fetchable_queries(plan))` — the F2-S3 [INVARIANT] number, counted
+    #: by the same function `client/pull.py` spends against. Nothing was
+    #: fetched to compute it and nothing ever will be.
+    estimated_calls: int
+    #: One entry per `years_back`, newest first.
+    cohorts: list[CohortPlan]
+
+
+class Workspace(BaseModel):
+    """One stored curation state, as `GET/PUT /api/workspaces/{key}` answers it.
+
+    `state` is nested — and is exactly a `DeriveRequest` — so that reopening a
+    recent search is "read this, POST it to `/api/derive`" with nothing added,
+    removed or renamed in between. A flat envelope would mix the store's own
+    bookkeeping (`key`, `saved_at`) into the curation state, and a client that
+    posted the whole thing back would get a 422 from `extra="forbid"`.
+
+    Deliberately carries **no derived statistic and no cache-freshness verdict**.
+    Whether the evidence behind this workspace has aged past the 7-day line is
+    F3-S2's cache modal to decide and to say; answering it here would make
+    every consumer of a saved workspace depend on a contract that does not
+    exist yet.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: The cache key this workspace is filed under — also its `pull_ref`.
+    key: str
+    #: When the store last wrote it. `None` only for a file that arrived on
+    #: disk by some route other than a save and whose mtime is unreadable.
+    saved_at: datetime | None
+    #: The curation state, restored verbatim: the exact body `POST /api/derive`
+    #: takes, including a `0.0` weight and a `null` candidate rent.
+    state: DeriveRequest
+    #: The search that produced the evidence, when the client stored it.
+    search: SearchParams | None = None
+
+
+class RecentWorkspace(BaseModel):
+    """One row of the recents table (F1-S1), from `GET /api/workspaces`.
+
+    An **index over stored workspaces**, rebuilt from the directory on every
+    read — never a second store that could drift from it — and deliberately
+    free of derived statistics. Serving an `anchor` column here would mean
+    deriving every saved workspace on Home's mount, against an epic budget of
+    "<1s, zero API calls", and would put a derived number in an index that has
+    no evidence in front of it. F1-S1 decides what to do about that column.
+
+    A row is never dropped for being unreadable. A workspace that vanished
+    from the list would take the user's curation with it, silently and with no
+    way back; the AC asks for the opposite — the row stays, says it is broken,
+    and offers the one thing that can fix it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    key: str
+    saved_at: datetime | None
+    #: The unit being priced. Carries the address F1-S1's table renders.
+    subject: Subject | None = None
+    #: Address / specs / radius for the table, when the workspace stored them.
+    search: SearchParams | None = None
+    #: Why this row cannot be opened — an unreadable workspace file, or
+    #: evidence that is no longer on disk. `None` on a healthy row.
+    error: str | None = None
+    #: Whether a full re-pull is the way out of `error` (F1's edge state).
+    offer_refresh: bool = False

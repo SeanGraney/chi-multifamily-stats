@@ -17,6 +17,129 @@ export interface paths {
      */
     post: operations["post_derive_api_derive_post"];
   };
+  "/api/search": {
+    /**
+     * Run (or resolve) a pull
+     * @description Resolve a search to a `pull_ref`, fetching only if it must (see module
+     * docstring).
+     *
+     * 422 for a window/params the planner refuses, 402 when the month cannot
+     * afford the pull, 400 when live mode is configured wrong. A per-query
+     * failure is NOT an error: the answer is a 200 whose `complete` is false and
+     * whose `missing` names the windows that never arrived (§5a — an incomplete
+     * first pull is usable, with the gap named loudly).
+     */
+    post: operations["post_search_api_search_post"];
+  };
+  "/api/workspaces": {
+    /**
+     * Recent searches
+     * @description The recents index: one row per stored workspace, newest first.
+     *
+     * Home asks for this on mount, so it must answer for *whatever is on disk* —
+     * an empty store is an empty list (not a 404), and a store with one
+     * unreadable file is a list with one error row in it, never a broken front
+     * door. One bad file cannot cost the user every other search they have run.
+     */
+    get: operations["get_workspaces_api_workspaces_get"];
+  };
+  "/api/workspaces/{key}": {
+    /**
+     * Load a workspace
+     * @description Restore one curation state exactly as it was last saved.
+     *
+     * 404 when nothing is saved under that key — a row the user deleted, or a
+     * link from an old session, is an ordinary condition. 404 too for a key that
+     * could never address a file (a traversal attempt); the two are deliberately
+     * indistinguishable, so a probe learns nothing about what is on disk.
+     *
+     * 500, **naming the file**, when the workspace exists and cannot be read. A
+     * named error is the point: an unhandled exception rendered as a status code
+     * is still a crash, and the user has to know which file to refresh or delete.
+     *
+     * Deliberately silent about how old the evidence is. Routing a stale workspace
+     * through the cache modal is F1's edge and F3-S2's contract, and F3-S2 does
+     * not exist yet; inventing a freshness verdict here would be a contract two
+     * stories would then have to agree on after the fact.
+     */
+    get: operations["get_workspace_api_workspaces__key__get"];
+    /**
+     * Save a workspace
+     * @description Persist one curation state, replacing whatever was stored under `key`.
+     *
+     * Saving is not deriving. This route computes no statistic and the response
+     * carries none — a client that got its numbers from a save response would
+     * have two sources of truth for them (D5) — which is also what keeps F14-S2's
+     * debounced autosave cheap enough to run on every mutation.
+     *
+     * 422 (from `WorkspaceState`) for a negative weight, an unknown field or a
+     * `selections` key: each of those is curation that would otherwise fail
+     * silently. 400 for a key that cannot address a file, or one that disagrees
+     * with the `pull_ref` in the body.
+     *
+     * Never validates the evidence. Curation outlives the pull it curates: a
+     * workspace over a deleted cache entry is an error row offering refresh, not
+     * a save the store refuses to accept.
+     */
+    put: operations["put_workspace_api_workspaces__key__put"];
+  };
+  "/api/search/plan": {
+    /**
+     * Preview a search's cohorts and call cost (fetches nothing)
+     * @description Price a search without running it.
+     *
+     * 422 for a window the planner refuses — trimming removes whitespace the user
+     * cannot see, never repairs a month-day they got wrong, so `"02-30"` still
+     * comes back as something the form can show inline.
+     */
+    post: operations["post_search_plan_api_search_plan_post"];
+  };
+  "/api/config": {
+    /**
+     * Read the §2.3 knobs
+     * @description The knobs as they are on disk, or §2.3's defaults when there is no file.
+     *
+     * Reading never writes (F0-S5): a fresh install must not have today's
+     * defaults frozen into a file by the act of opening Settings, or a future
+     * default change would silently not reach it.
+     */
+    get: operations["get_config_api_config_get"];
+    /**
+     * Replace the §2.3 knobs
+     * @description Persist every knob; answer with what is now stored.
+     *
+     * 422 comes from the model, before this function runs: an out-of-range knob,
+     * an unknown key, a non-canonical `drift_source`, unsorted `km_horizons_days`
+     * or `query_padding_days` all fail validation, so a refused save cannot have
+     * touched the file. Never clamped and never defaulted — a clamped knob is a
+     * lie, since the user sees the value they typed while the math uses another.
+     */
+    put: operations["put_config_api_config_put"];
+  };
+  "/api/settings/api-key": {
+    /**
+     * Is an API key configured?
+     * @description Presence only — never the key (module docstring).
+     *
+     * Settings has to render "configured" vs "not configured", and that is a
+     * boolean; anything richer would be a leak wearing a helpful face.
+     */
+    get: operations["get_api_key_status_api_settings_api_key_get"];
+    /**
+     * Store the RentCast API key
+     * @description Store `api_key` where `RentCastClient` will look for it.
+     *
+     * Surrounding whitespace is trimmed by `save_api_key`, and that is the case
+     * that bites hardest: a key pasted from a dashboard usually arrives with a
+     * trailing newline, and a stored key with a space in it fails authentication
+     * with a 401 that costs one of the month's 50 calls to discover.
+     *
+     * A blank (or whitespace-only) value is a 422, not a stored empty string — a
+     * stored blank produces a file that *looks* configured while `load_api_key()`
+     * reports `None`, so the user would find out at the first live pull.
+     */
+    put: operations["put_api_key_api_settings_api_key_put"];
+  };
 }
 
 export type webhooks = Record<string, never>;
@@ -44,6 +167,34 @@ export interface components {
       n_comps: number;
       /** Comp Keys */
       comp_keys: string[];
+    };
+    /**
+     * ApiKeyRequest
+     * @description The one field Settings sends. Never logged, never echoed back.
+     *
+     * Typed as a plain `str` with no length or pattern constraint: the only
+     * authority on what a usable key is, is `storage/secrets.py::save_api_key`,
+     * and a second opinion here would either reject a valid key or accept one
+     * that function then refuses.
+     */
+    ApiKeyRequest: {
+      /** Api Key */
+      api_key: string;
+    };
+    /**
+     * ApiKeyStatus
+     * @description Whether a key is configured. A boolean, by design — see the module
+     * docstring's security invariant.
+     *
+     * True when `load_api_key()` finds one, which is the only question worth
+     * answering: that function is what the RentCast client consults, so this
+     * reports whether a live pull would have a credential rather than whether
+     * some file exists. It is therefore also true when the key comes from
+     * `RENTCAST_API_KEY` rather than from a save made here.
+     */
+    ApiKeyStatus: {
+      /** Configured */
+      configured: boolean;
     };
     /** Band[KMCurve] */
     Band_KMCurve_: {
@@ -93,6 +244,8 @@ export interface components {
       comp_keys: {
         [key: string]: string[];
       };
+      /** Dropped Outside Window */
+      dropped_outside_window?: number | null;
     };
     /**
      * BucketStat
@@ -140,6 +293,22 @@ export interface components {
       count: number;
       /** Comp Keys */
       comp_keys: string[];
+    };
+    /**
+     * CohortPlan
+     * @description One cohort year in a planned pull, and whether it can be fetched.
+     *
+     * `fetchable` is false for a window that has not opened yet — the planner
+     * emits it anyway, and so does this, because "silently absent" and "planned
+     * but empty" are different things to a user checking whether their date
+     * window is the one they meant (`client/planner.py`). It costs nothing, so
+     * it is never billed either (F4-S1 AC4).
+     */
+    CohortPlan: {
+      /** Year */
+      year: number;
+      /** Fetchable */
+      fetchable: boolean;
     };
     /**
      * CohortStat
@@ -347,6 +516,8 @@ export interface components {
       censored: boolean;
       /** Removal Class */
       removal_class: ("pending" | "provisional" | "confirmed") | null;
+      /** Days Since Removal */
+      days_since_removal: number | null;
       /** Withdrawal Suspect */
       withdrawal_suspect: boolean;
       /** Sqft Suspect */
@@ -546,6 +717,174 @@ export interface components {
       calls_to_complete: number;
     };
     /**
+     * RecentWorkspace
+     * @description One row of the recents table (F1-S1), from `GET /api/workspaces`.
+     *
+     * An **index over stored workspaces**, rebuilt from the directory on every
+     * read — never a second store that could drift from it — and deliberately
+     * free of derived statistics. Serving an `anchor` column here would mean
+     * deriving every saved workspace on Home's mount, against an epic budget of
+     * "<1s, zero API calls", and would put a derived number in an index that has
+     * no evidence in front of it. F1-S1 decides what to do about that column.
+     *
+     * A row is never dropped for being unreadable. A workspace that vanished
+     * from the list would take the user's curation with it, silently and with no
+     * way back; the AC asks for the opposite — the row stays, says it is broken,
+     * and offers the one thing that can fix it.
+     */
+    RecentWorkspace: {
+      /** Key */
+      key: string;
+      /** Saved At */
+      saved_at: string | null;
+      subject?: components["schemas"]["Subject"] | null;
+      search?: components["schemas"]["SearchParams"] | null;
+      /** Error */
+      error?: string | null;
+      /**
+       * Offer Refresh
+       * @default false
+       */
+      offer_refresh?: boolean;
+    };
+    /**
+     * SearchParams
+     * @description The comp-net definition that produced one pull's evidence (F2-S1/F4-S9).
+     *
+     * Deliberately the *pull's* parameters and nothing else: the subject's own
+     * sqft, the drift assumption and every curation knob belong to
+     * `DeriveRequest`, because none of them change which records come back.
+     * Keeping them out is what makes the cache key a function of the search
+     * (F3-S1) rather than of everything the user has touched since.
+     *
+     * `extra="forbid"` for the same reason as `DeriveRequest`: a typo'd field
+     * here would silently widen or narrow a pull that costs real money.
+     *
+     * Split out of `SearchRequest` by F1-S2 because a stored workspace has to
+     * carry these values and must *not* carry `force_refresh` — consent to spend
+     * money is a property of one request, never of saved state. One declaration
+     * of the eight fields, so the params a workspace remembers and the params a
+     * search submits cannot drift apart.
+     */
+    SearchParams: {
+      /** Address */
+      address: string;
+      /** Radius */
+      radius: number;
+      /** Bedrooms */
+      bedrooms: string;
+      /** Bathrooms */
+      bathrooms?: string | null;
+      /** Property Types */
+      property_types: string[];
+      /** Years Back */
+      years_back: number;
+      /** Window Start */
+      window_start: string;
+      /** Window End */
+      window_end: string;
+    };
+    /**
+     * SearchPlan
+     * @description What `POST /api/search/plan` answers (F2-S3) — the cost of a search,
+     * before anyone has agreed to pay it.
+     *
+     * Spec §6.3's preview line, as data: *"Jun 15–30 · 2026, 2025 (2 cohorts) ·
+     * est. N API calls."* Every part of that sentence is a backend fact here,
+     * including the cohort years — D5/D13 make the SPA a renderer, and a frontend
+     * reconstructing the year set by subtracting from `new Date()` would be a
+     * second implementation of the planner's calendar rules.
+     *
+     * Deliberately the same field *names* as the overlapping half of
+     * `SearchResult`, because they are the same facts about the same search: a
+     * preview whose `estimated_calls` or `pull_ref` did not match the submit's
+     * would be worse than no preview at all.
+     */
+    SearchPlan: {
+      /** Pull Ref */
+      pull_ref: string;
+      /**
+       * Cache Status
+       * @enum {string}
+       */
+      cache_status: "hit" | "miss" | "stale";
+      /** Estimated Calls */
+      estimated_calls: number;
+      /** Cohorts */
+      cohorts: components["schemas"]["CohortPlan"][];
+    };
+    /**
+     * SearchRequest
+     * @description What a search form submits: the pull's params plus the consent flag.
+     *
+     * `force_refresh` lives here and nowhere else. It is the user's decision, in
+     * one moment, to re-spend on evidence already on disk — never a property of
+     * anything persisted, which is why `SearchParams` (what a workspace stores)
+     * stops one field short of it.
+     */
+    SearchRequest: {
+      /** Address */
+      address: string;
+      /** Radius */
+      radius: number;
+      /** Bedrooms */
+      bedrooms: string;
+      /** Bathrooms */
+      bathrooms?: string | null;
+      /** Property Types */
+      property_types: string[];
+      /** Years Back */
+      years_back: number;
+      /** Window Start */
+      window_start: string;
+      /** Window End */
+      window_end: string;
+      /**
+       * Force Refresh
+       * @default false
+       */
+      force_refresh?: boolean;
+      /**
+       * Resume
+       * @default false
+       */
+      resume?: boolean;
+    };
+    /**
+     * SearchResult
+     * @description What `POST /api/search` answers (F4-S9) — the outcome of a pull.
+     *
+     * No comps: evidence is addressed by reference (`pull_ref`) and fetched by
+     * `POST /api/derive`, the same reason `DeriveRequest` carries a ref rather
+     * than an uploaded comp list (ADR-001 §1.1).
+     *
+     * The cost fields exist so the user can never be surprised by a spend:
+     * `estimated_calls` is what a full (re)pull of this search costs,
+     * `calls_spent` is what this request actually cost, and `calls_to_complete`
+     * is what finishing an incomplete pull would cost. All three count the same
+     * unit — one fetchable query — so F2-S3's [INVARIANT] ("the number displayed
+     * and the number spent are one number") holds across the whole flow.
+     */
+    SearchResult: {
+      /** Pull Ref */
+      pull_ref: string;
+      /**
+       * Cache Status
+       * @enum {string}
+       */
+      cache_status: "hit" | "miss" | "stale";
+      /** Estimated Calls */
+      estimated_calls: number;
+      /** Calls Spent */
+      calls_spent: number;
+      /** Complete */
+      complete: boolean;
+      /** Missing */
+      missing: string[];
+      /** Calls To Complete */
+      calls_to_complete: number;
+    };
+    /**
      * Subject
      * @description The unit being priced. Not a comp: it is never evidence for itself.
      */
@@ -575,6 +914,69 @@ export interface components {
       input?: unknown;
       /** Context */
       ctx?: Record<string, never>;
+    };
+    /**
+     * Workspace
+     * @description One stored curation state, as `GET/PUT /api/workspaces/{key}` answers it.
+     *
+     * `state` is nested — and is exactly a `DeriveRequest` — so that reopening a
+     * recent search is "read this, POST it to `/api/derive`" with nothing added,
+     * removed or renamed in between. A flat envelope would mix the store's own
+     * bookkeeping (`key`, `saved_at`) into the curation state, and a client that
+     * posted the whole thing back would get a 422 from `extra="forbid"`.
+     *
+     * Deliberately carries **no derived statistic and no cache-freshness verdict**.
+     * Whether the evidence behind this workspace has aged past the 7-day line is
+     * F3-S2's cache modal to decide and to say; answering it here would make
+     * every consumer of a saved workspace depend on a contract that does not
+     * exist yet.
+     */
+    Workspace: {
+      /** Key */
+      key: string;
+      /** Saved At */
+      saved_at: string | null;
+      state: components["schemas"]["DeriveRequest"];
+      search?: components["schemas"]["SearchParams"] | null;
+    };
+    /**
+     * WorkspaceState
+     * @description The body of `PUT /api/workspaces/{key}` — one saved workspace (F1-S2).
+     *
+     * Literally `DeriveRequest` plus the search that produced the evidence it
+     * curates. Inheritance rather than a parallel model on purpose: "restored
+     * exactly as last left" means the thing that comes back out of the store is
+     * the thing `POST /api/derive` takes, so a field that exists on one and not
+     * the other is a field the user can lose.
+     *
+     * **Why `search` has to be here at all.** F1-S1's recents table renders
+     * address / specs / radius per row, and none of those is recoverable from
+     * anything else on disk: the cache key is a one-way SHA256 of the search
+     * params (F3-S1) and the manifest holds only `as_of`, the window and the
+     * per-query record. So the workspace stores them at save time or they are
+     * gone. Optional, because a client that has not got them (or does not care)
+     * must still be able to save curation — losing a table column is not a
+     * reason to lose the user's work.
+     */
+    WorkspaceState: {
+      /** Pull Ref */
+      pull_ref: string;
+      subject: components["schemas"]["Subject"];
+      /** Weights */
+      weights?: {
+        [key: string]: number;
+      };
+      /** Include Overrides */
+      include_overrides?: string[];
+      filters?: components["schemas"]["Filters"];
+      /**
+       * Drift Pct
+       * @default 0
+       */
+      drift_pct?: number;
+      /** Candidate Rent */
+      candidate_rent?: number | null;
+      search?: components["schemas"]["SearchParams"] | null;
     };
   };
   responses: never;
@@ -610,6 +1012,269 @@ export interface operations {
       200: {
         content: {
           "application/json": components["schemas"]["DerivedState"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Run (or resolve) a pull
+   * @description Resolve a search to a `pull_ref`, fetching only if it must (see module
+   * docstring).
+   *
+   * 422 for a window/params the planner refuses, 402 when the month cannot
+   * afford the pull, 400 when live mode is configured wrong. A per-query
+   * failure is NOT an error: the answer is a 200 whose `complete` is false and
+   * whose `missing` names the windows that never arrived (§5a — an incomplete
+   * first pull is usable, with the gap named loudly).
+   */
+  post_search_api_search_post: {
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SearchRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["SearchResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Recent searches
+   * @description The recents index: one row per stored workspace, newest first.
+   *
+   * Home asks for this on mount, so it must answer for *whatever is on disk* —
+   * an empty store is an empty list (not a 404), and a store with one
+   * unreadable file is a list with one error row in it, never a broken front
+   * door. One bad file cannot cost the user every other search they have run.
+   */
+  get_workspaces_api_workspaces_get: {
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["RecentWorkspace"][];
+        };
+      };
+    };
+  };
+  /**
+   * Load a workspace
+   * @description Restore one curation state exactly as it was last saved.
+   *
+   * 404 when nothing is saved under that key — a row the user deleted, or a
+   * link from an old session, is an ordinary condition. 404 too for a key that
+   * could never address a file (a traversal attempt); the two are deliberately
+   * indistinguishable, so a probe learns nothing about what is on disk.
+   *
+   * 500, **naming the file**, when the workspace exists and cannot be read. A
+   * named error is the point: an unhandled exception rendered as a status code
+   * is still a crash, and the user has to know which file to refresh or delete.
+   *
+   * Deliberately silent about how old the evidence is. Routing a stale workspace
+   * through the cache modal is F1's edge and F3-S2's contract, and F3-S2 does
+   * not exist yet; inventing a freshness verdict here would be a contract two
+   * stories would then have to agree on after the fact.
+   */
+  get_workspace_api_workspaces__key__get: {
+    parameters: {
+      path: {
+        key: string;
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["Workspace"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Save a workspace
+   * @description Persist one curation state, replacing whatever was stored under `key`.
+   *
+   * Saving is not deriving. This route computes no statistic and the response
+   * carries none — a client that got its numbers from a save response would
+   * have two sources of truth for them (D5) — which is also what keeps F14-S2's
+   * debounced autosave cheap enough to run on every mutation.
+   *
+   * 422 (from `WorkspaceState`) for a negative weight, an unknown field or a
+   * `selections` key: each of those is curation that would otherwise fail
+   * silently. 400 for a key that cannot address a file, or one that disagrees
+   * with the `pull_ref` in the body.
+   *
+   * Never validates the evidence. Curation outlives the pull it curates: a
+   * workspace over a deleted cache entry is an error row offering refresh, not
+   * a save the store refuses to accept.
+   */
+  put_workspace_api_workspaces__key__put: {
+    parameters: {
+      path: {
+        key: string;
+      };
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WorkspaceState"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["Workspace"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Preview a search's cohorts and call cost (fetches nothing)
+   * @description Price a search without running it.
+   *
+   * 422 for a window the planner refuses — trimming removes whitespace the user
+   * cannot see, never repairs a month-day they got wrong, so `"02-30"` still
+   * comes back as something the form can show inline.
+   */
+  post_search_plan_api_search_plan_post: {
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SearchRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["SearchPlan"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Read the §2.3 knobs
+   * @description The knobs as they are on disk, or §2.3's defaults when there is no file.
+   *
+   * Reading never writes (F0-S5): a fresh install must not have today's
+   * defaults frozen into a file by the act of opening Settings, or a future
+   * default change would silently not reach it.
+   */
+  get_config_api_config_get: {
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["Config"];
+        };
+      };
+    };
+  };
+  /**
+   * Replace the §2.3 knobs
+   * @description Persist every knob; answer with what is now stored.
+   *
+   * 422 comes from the model, before this function runs: an out-of-range knob,
+   * an unknown key, a non-canonical `drift_source`, unsorted `km_horizons_days`
+   * or `query_padding_days` all fail validation, so a refused save cannot have
+   * touched the file. Never clamped and never defaulted — a clamped knob is a
+   * lie, since the user sees the value they typed while the math uses another.
+   */
+  put_config_api_config_put: {
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["Config"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["Config"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Is an API key configured?
+   * @description Presence only — never the key (module docstring).
+   *
+   * Settings has to render "configured" vs "not configured", and that is a
+   * boolean; anything richer would be a leak wearing a helpful face.
+   */
+  get_api_key_status_api_settings_api_key_get: {
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["ApiKeyStatus"];
+        };
+      };
+    };
+  };
+  /**
+   * Store the RentCast API key
+   * @description Store `api_key` where `RentCastClient` will look for it.
+   *
+   * Surrounding whitespace is trimmed by `save_api_key`, and that is the case
+   * that bites hardest: a key pasted from a dashboard usually arrives with a
+   * trailing newline, and a stored key with a space in it fails authentication
+   * with a 401 that costs one of the month's 50 calls to discover.
+   *
+   * A blank (or whitespace-only) value is a 422, not a stored empty string — a
+   * stored blank produces a file that *looks* configured while `load_api_key()`
+   * reports `None`, so the user would find out at the first live pull.
+   */
+  put_api_key_api_settings_api_key_put: {
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ApiKeyRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["ApiKeyStatus"];
         };
       };
       /** @description Validation Error */

@@ -1,6 +1,6 @@
 /**
- * WS-1 — the walking skeleton's one browser-genuine assertion: Results
- * fires the hardcoded `POST /api/derive` on mount and renders REAL numbers
+ * WS-1 — the walking skeleton's one browser-genuine assertion: a real
+ * `POST /api/derive` round-trips and Results renders REAL numbers
  * (a comp list, the bucket table, the price-test guard panel) — not that
  * any one number is exactly right (that's the L1/L2 suite's job:
  * `backend/tests/unit/test_ws1_*.py`, `test_ws1_anchor_drift.py`,
@@ -25,20 +25,61 @@
  * seeds `RENTCOMP_HOME` with them (that plumbing is the developer's call,
  * flagged in `backend/tests/unit/test_ws1_end_to_end_pipeline.py`'s
  * docstring). `RENTCOMP_LIVE` is never set.
+ *
+ * ===========================================================================
+ * RETARGETED FOR F4-S6 — PM RULING, AND WHAT DID *NOT* CHANGE
+ * ===========================================================================
+ * This file used to be titled "Results fires the hardcoded derive and renders
+ * real data". It made two claims, and F4-S6 only invalidated the first:
+ *
+ *   "fires the hardcoded derive"  — OBSOLETE BY DESIGN. `Results.tsx` held
+ *     `const PULL_REF = "ws1-real"` and derived it unconditionally on mount,
+ *     so the owner could spend real API calls on a real address, open Results,
+ *     and be shown the analysis of a fixture. F4-S6 deleted that constant on
+ *     purpose; Results now derives nothing until a pull is open.
+ *   "renders real data"           — STILL WS-1's COVERAGE, and still valuable.
+ *
+ * So the door changed and the assertions did not. Every `expect` in this file
+ * survives untouched, because — checked one by one — not one of them actually
+ * asserts that the derive is *hardcoded*: that claim lived entirely in the
+ * describe title, this docstring, and one test's name and failure message.
+ * The round-trip assertion (`status === 200`) is agnostic about which door
+ * opened the pull, so it is retargeted rather than dropped. **No coverage was
+ * quietly deleted here; there was nothing to delete.**
  */
 import { test, expect, type Page } from "@playwright/test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import {
+  REPO_ROOT,
+  VENV_RENTCOMP,
+  VENV_RENTCOMP_HINT,
+  NPM,
+  NPM_NEEDS_SHELL,
+} from "./support/local-server";
+import { arriveWithAPullToOpen, submitSearch } from "./support/open-pull";
 
-const REPO_ROOT = path.resolve(__dirname, "../..");
 const FRONTEND_DIR = path.join(REPO_ROOT, "frontend");
 const FRONTEND_DIST = path.join(FRONTEND_DIR, "dist");
-const VENV_RENTCOMP = path.join(REPO_ROOT, ".venv", "bin", "rentcomp");
 const BASE_URL = "http://127.0.0.1:8000"; // D7/__main__.py hardcodes 8000, no PORT override
 
-test.describe.configure({ mode: "serial" });
+/**
+ * NO `test.describe.configure({ mode: "serial" })` — removed under QUEUE row
+ * 44a (PM-authorised).
+ *
+ * It bailed every test after the first failure, so the five tests below
+ * reported as `1 failed, 4 did not run` — and "did not run" is the same family
+ * as the silent skip WORKFLOW.md §2 records repeated recurrences of: it hides
+ * how much of the suite is actually red. Measured on this very file during the
+ * F4-S6 seam fix: `1 failed, 4 did not run` with it, versus all five reporting
+ * their own result without it.
+ *
+ * It bought nothing to begin with: `playwright.config.ts` already pins
+ * `workers: 1, fullyParallel: false`, and every test below arranges its own
+ * navigation and its own derive — none depends on another's state.
+ */
 
 let serverProcess: ChildProcess | null = null;
 let rentcompHome: string | null = null;
@@ -64,13 +105,13 @@ test.beforeAll(async () => {
     return;
   }
   if (!existsSync(VENV_RENTCOMP)) {
-    setupFailure = ".venv/bin/rentcomp not found — expected `pip install -e backend/`";
+    setupFailure = `${VENV_RENTCOMP_HINT} not found — expected \`pip install -e backend/\``;
     return;
   }
 
   try {
-    execFileSync("npm", ["install"], { cwd: FRONTEND_DIR, stdio: "pipe" });
-    execFileSync("npm", ["run", "build"], { cwd: FRONTEND_DIR, stdio: "pipe" });
+    execFileSync(NPM, ["install"], { cwd: FRONTEND_DIR, stdio: "pipe", shell: NPM_NEEDS_SHELL });
+    execFileSync(NPM, ["run", "build"], { cwd: FRONTEND_DIR, stdio: "pipe", shell: NPM_NEEDS_SHELL });
   } catch (err: any) {
     setupFailure = `npm install/build failed: ${err?.stderr?.toString?.() ?? err}`;
     return;
@@ -112,19 +153,25 @@ function skipIfSetupFailed() {
   test.skip(!!setupFailure, setupFailure ?? "");
 }
 
+/**
+ * Open a pull and land on Results — the user's own route in.
+ *
+ * Was: navigate to Results and let its hardcoded `PULL_REF` derive on mount.
+ * F4-S6 removed that constant, so a pull has to be opened first, through the
+ * search form (F4 flow step 4, "the system lands the user on Results"). The
+ * derive itself is still the LIVE server's, which is the whole point of this
+ * file — "renders real data" cannot be asserted against a stubbed payload.
+ * See `support/open-pull.ts`.
+ */
 async function gotoResults(page: Page) {
-  await page.goto(BASE_URL + "/");
-  const resultsLink = page
-    .getByRole("link", { name: /results/i })
-    .or(page.getByRole("button", { name: /results/i }))
-    .or(page.locator("[data-testid='nav-results']"));
-  await resultsLink.first().click();
+  await arriveWithAPullToOpen(page, BASE_URL);
+  await submitSearch(page);
 }
 
-test.describe("WS-1 — Results fires the hardcoded derive and renders real data", () => {
+test.describe("WS-1 — a real derive round-trips and Results renders real data", () => {
   test.beforeEach(skipIfSetupFailed);
 
-  test("Results issues a real POST /api/derive on mount and it succeeds", async ({ page }) => {
+  test("a real POST /api/derive round-trips and succeeds", async ({ page }) => {
     const derivePromise = page.waitForResponse(
       (res) => res.url().includes("/api/derive") && res.request().method() === "POST",
       { timeout: 15_000 }
@@ -133,7 +180,10 @@ test.describe("WS-1 — Results fires the hardcoded derive and renders real data
     const response = await derivePromise;
     expect(
       response.status(),
-      "the hardcoded search must round-trip successfully — a non-200 means the wiring (pull_ref " +
+      // Was "the hardcoded search must round-trip successfully". The search is
+      // no longer hardcoded — F4-S6 made the ref arrive from the pull the user
+      // opened — but the round trip this asserts is unchanged and still real.
+      "the derive must round-trip successfully — a non-200 means the wiring (pull_ref " +
         "resolution against the real committed fixtures, or the request body itself) is broken"
     ).toBe(200);
   });

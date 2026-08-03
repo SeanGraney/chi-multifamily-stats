@@ -11,7 +11,8 @@ stages that story replaced (`test_no_placeholder_stage_survives_ws1` in
     isn't built yet)
   * `derive.py`: `premium_basis="selected"` always (F4-S5's pulled-set
     fallback isn't built yet)
-  * `derive.py`: `partial_pull=None` always (F4-S6/D24 isn't built yet)
+  * `derive.py`: `partial_pull=None` always (D24 gap tracking isn't built yet)
+    — **RETIRED by F4-S9**, see below
 
 None of these are WRONG values today — they're honest defaults for what
 WS-1 actually computed — but nothing tells a reader they're provisional.
@@ -20,6 +21,40 @@ The dispatch's own convention: each should emit a `provisional_field`-coded
 model — no schema change), the same self-documenting pattern
 `_STUB_WARNINGS` used, so a later story (F5-S1, F4-S5, F4-S6) can delete its
 own warning as it lands for real.
+
+**F4-S5 EXERCISES IT AGAIN — `premium_basis` is real now.** The pulled-set
+fallback for thin cohorts is built: a cohort with fewer than
+`min_cohort_size` selected comps reports `basis="pulled"`, and every comp in
+it carries `premium_basis="pulled"`, so the field now names which set the
+median behind each premium actually came from rather than always saying
+"selected" because there was only ever one set. Its warning is therefore
+deleted and the expected count here drops 2 → 1, exactly as F4-S9 did below
+and exactly as this file's own docstring promised ("a later story (F5-S1,
+F4-S5, F4-S6) can delete its own warning as it lands for real"). F4-S5's own
+suite pins the replacement behaviour in both directions —
+`test_f4s5_premium_basis.py::test_the_fallback_flag_flips_as_comps_are_
+toggled_across_the_threshold` (the flag tracks the selection across the
+threshold, both ways) and `::test_premium_basis_is_never_null_where_a_
+premium_exists` (no premium travels unlabelled). `sqft_suspect` is untouched
+and still clears when F5-S1 lands.
+
+Edited by QA on `story/F4-S5-qa` **before** the developer started, so the
+retirement runs red like every other half of this story's red state. Flagged
+to the PM at handoff: this is a deliberate change to an existing spec, made
+under the convention the file itself documents and under F4-S9's precedent —
+not a spec weakened to reach green.
+
+**F4-S9 EXERCISED THAT CONVENTION — `partial_pull` is real now (PM ruling).**
+The pull orchestrator records which planned windows never arrived in the
+pull's manifest and the API edge hands that to `DeriveContext`, so
+`meta.partial_pull` is now `None` iff the pull has no gap, rather than `None`
+because nobody had looked. Its warning is therefore deleted and the expected
+count here drops 3 → 2. The remaining two (`sqft_suspect`, `premium_basis`)
+are untouched and still clear independently when F5-S1/F4-S5 land. F4-S9's
+own suite pins the replacement behaviour both ways —
+`test_f4s9_search_route.py::test_derive_reports_the_partial_pull_in_its_provenance`
+(a 4-of-6 pull reports its gap) and `::test_derive_reports_no_gap_for_a_
+complete_pull` (a whole pull still reports `null`).
 
 WHAT THIS FILE PINS, DELIBERATELY LOOSELY
 ------------------------------------------
@@ -37,25 +72,48 @@ from __future__ import annotations
 
 PROVISIONAL_FIELD_CODE = "provisional_field"
 
-#: The three fields named in the dispatch, and a substring each warning's
-#: message must contain to prove it names *itself* and not something else.
-EXPECTED_PROVISIONAL_FIELDS = {"sqft_suspect", "premium_basis", "partial_pull"}
+#: The fields still provisional, and a substring each warning's message must
+#: contain to prove it names *itself* and not something else. `partial_pull`
+#: was here until F4-S9 made it real, and `premium_basis` until F4-S5 did
+#: (module docstring).
+EXPECTED_PROVISIONAL_FIELDS = {"sqft_suspect"}
+
+#: A field whose warning has been retired must not linger: a warning for a
+#: value that IS computed trains the user to ignore the ones that matter.
+RETIRED_PROVISIONAL_FIELDS = {"partial_pull", "premium_basis"}
 
 
 def _provisional_field_warnings(derived: dict) -> list[dict]:
     return [w for w in derived["warnings"] if w["code"] == PROVISIONAL_FIELD_CODE]
 
 
-def test_three_provisional_field_warnings_are_present(derived) -> None:
-    """One per placeholder field (see module docstring) — not fewer (a field
-    silently undocumented), not merged into one warning (a reader could not
-    tell which field is still provisional from a combined message without
-    reading every message's full text, and each field clears independently
-    as F5-S1/F4-S5/F4-S6 land, so they cannot share a lifecycle)."""
+def test_one_provisional_field_warning_per_remaining_placeholder(derived) -> None:
+    """One per still-provisional field (see module docstring) — not fewer (a
+    field silently undocumented), not merged into one warning (a reader could
+    not tell which field is still provisional from a combined message without
+    reading every message's full text, and each field clears independently as
+    F5-S1/F4-S5 land, so they cannot share a lifecycle)."""
     warnings = _provisional_field_warnings(derived)
-    assert len(warnings) == 3, (
-        f"expected exactly 3 '{PROVISIONAL_FIELD_CODE}' warnings (one per placeholder field "
-        f"named in the WS-1a dispatch), got {len(warnings)}: {warnings}"
+    assert len(warnings) == len(EXPECTED_PROVISIONAL_FIELDS), (
+        f"expected exactly {len(EXPECTED_PROVISIONAL_FIELDS)} '{PROVISIONAL_FIELD_CODE}' "
+        f"warnings (one per field still provisional), got {len(warnings)}: {warnings}"
+    )
+
+
+def test_a_field_that_became_real_no_longer_warns(derived) -> None:
+    """The other half of the convention: a story that makes a placeholder real
+    deletes its warning. A `provisional_field` warning for a value that IS
+    computed is a false warning, and false warnings are how the real ones stop
+    being read."""
+    stale = [
+        warning
+        for warning in _provisional_field_warnings(derived)
+        for field in RETIRED_PROVISIONAL_FIELDS
+        if field in warning["message"]
+    ]
+    assert stale == [], (
+        f"a '{PROVISIONAL_FIELD_CODE}' warning still names {sorted(RETIRED_PROVISIONAL_FIELDS)}, "
+        f"which is computed for real now: {stale}"
     )
 
 
@@ -76,16 +134,15 @@ def test_each_provisional_field_warning_names_its_own_field(derived) -> None:
 
 def test_provisional_field_warnings_survive_over_the_real_ws1_pull(derive) -> None:
     """Not a synthetic-fixture-only artifact — the real ws1-real pull hits
-    every one of these three placeholders too (every comp's `sqft_suspect`
-    is still hardcoded False, every premium's basis is still "selected", and
-    `partial_pull` is still always None, regardless of which pull is
-    derived)."""
+    every remaining placeholder too (every comp's `sqft_suspect` is still
+    hardcoded False and every premium's basis is still "selected", regardless
+    of which pull is derived)."""
     response = derive(pull_ref="ws1-real", candidate_rent=None)
     assert response.status_code == 200, response.text[:600]
     warnings = [w for w in response.json()["warnings"] if w["code"] == PROVISIONAL_FIELD_CODE]
-    assert len(warnings) == 3, (
-        f"expected 3 '{PROVISIONAL_FIELD_CODE}' warnings over the real ws1-real pull too, "
-        f"got {len(warnings)}: {warnings}"
+    assert len(warnings) == len(EXPECTED_PROVISIONAL_FIELDS), (
+        f"expected {len(EXPECTED_PROVISIONAL_FIELDS)} '{PROVISIONAL_FIELD_CODE}' warnings "
+        f"over the real ws1-real pull too, got {len(warnings)}: {warnings}"
     )
 
 

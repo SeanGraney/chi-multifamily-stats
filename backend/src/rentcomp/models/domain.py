@@ -22,24 +22,58 @@ a DOM, and a censoring flag. It does not promise a `psf`* — 14.7% of the real
 pull has no `squareFootage`, and those records must survive into the response
 with `psf=None` rather than be dropped or given a fabricated zero.
 
-`Spell` is intentionally absent: it is the stitcher's intermediate artifact
-and nothing in the derivation graph consumes it. F4-S3 adds it.
+`Spell` was intentionally absent through F4-S2 — it is the stitcher's
+intermediate artifact and nothing in the derivation graph consumes it. F4-S3
+adds it here, as that docstring promised: a domain type defined inside
+`pipeline/` is our-truth data living in the derivation layer, which is how a
+DTO starts leaking past the pipeline boundary. `pipeline.shape` re-exports
+the same class object, so nothing that already imports it has to move.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["PriceCut", "RemovalClass", "StitchedComp"]
+__all__ = ["PriceCut", "RemovalClass", "Spell", "StitchedComp"]
 
 #: The removal-confidence ladder (NORTH_STAR, F4-S8). `None` — not a member of
 #: this Literal — means *still active*: a censored listing has not been
 #: removed, let alone leased. ARCHITECTURE.md §3's `leased` spelling is an
 #: erratum (PM ruling, F0-S2); the ladder ends at `confirmed`.
 RemovalClass = Literal["pending", "provisional", "confirmed"]
+
+
+@dataclass(frozen=True, slots=True)
+class Spell:
+    """One reported listing interval, before stitching (F4-S2/F4-S3).
+
+    ``removed is None`` means the spell was still open when the pull was
+    taken — the censored case NORTH_STAR calls the single most important
+    distinction in the system. The fields past ``price`` are the record
+    attributes the spell was read from; they ride along so the stitcher can
+    populate a `StitchedComp` without a second pass over the raw dicts.
+
+    A plain frozen dataclass rather than a `BaseModel`: nothing crosses a
+    trust boundary here (its values were already validated at the DTO edge),
+    it is constructed once per spell over every record in a pull, and it is
+    never serialized. `StitchedComp` above is the model — this is the
+    intermediate the stitcher folds into one.
+    """
+
+    listed: date
+    removed: date | None
+    price: float
+    address: str
+    unit: str | None
+    lat: float
+    lng: float
+    beds: float
+    baths: float | None
+    sqft: float | None
 
 
 class PriceCut(BaseModel):
@@ -97,6 +131,39 @@ class StitchedComp(BaseModel):
     cut_history: tuple[PriceCut, ...] = ()
     relist_count: int = Field(default=0, ge=0)
     gap_days: int = Field(default=0, ge=0)
+
+    @property
+    def removed_on(self) -> date | None:
+        """The chain's final removal date, or `None` while it is still active.
+
+        F4-S8: the datum the removal ladder is *measured from*. `removal_class`
+        is a function of `as_of − removed_on`, so a row that says "pending"
+        without being able to say *since when* is an assertion the user cannot
+        check — and the story's own row copy ("removed 4d — classifying") is
+        that date, rendered.
+
+        A **property**, not a stored field, for the same reason `psf` is one:
+        it cannot drift from its inputs. F4-S3 defines `effective_dom` as
+        *final removal − first listed*, so for any comp the pipeline shaped,
+        `first_listed + effective_dom` **is** the final removal — reconstructed
+        here rather than stored beside it, where the two could disagree after a
+        change to either. (`pipeline/shape.py::_build_comp` is the one place
+        that identity is established; `tests/unit/test_f4s8_removed_on.py`
+        pins it against the raw `removedDate` the records actually carried.)
+
+        `None` in exactly two cases, both honest:
+
+        * `censored` — a still-listed unit has not been removed, let alone
+          leased (NORTH_STAR's most important distinction). Its `effective_dom`
+          is a floor measured to the pull date, so `first_listed +
+          effective_dom` would reconstruct the *pull date*, not a removal.
+        * `first_listed is None` — a hand-built `StitchedComp` from a test that
+          did not go through `shape_raw_pull`. Real shaping always sets it (see
+          that field's note); nothing is inferred from its absence.
+        """
+        if self.censored or self.first_listed is None:
+            return None
+        return self.first_listed + timedelta(days=self.effective_dom)
 
     @property
     def psf(self) -> float | None:

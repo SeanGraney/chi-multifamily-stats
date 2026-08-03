@@ -28,33 +28,87 @@
  *
  * Zero live RentCast calls (WORKFLOW.md §6): RENTCOMP_HOME points at a
  * fresh temp dir for the spawned server, RENTCOMP_LIVE is never set.
+ *
+ * ===========================================================================
+ * PORT: EPHEMERAL, NOT 8000 (QUEUE.md row 44a)
+ * ===========================================================================
+ * This file used to spawn the `rentcomp` console script on the hardcoded
+ * `127.0.0.1:8000` with no identity check at all — one of the two confirmed
+ * incidents row 44a exists for (F7-S1's QA verify: `serverProcess.kill()` is
+ * async, so back-to-back specs on 8000 can bind-fail against a still-dying
+ * previous server and get a false answer). Moved to the WORKFLOW.md §2
+ * ratified pattern — bind a free high port and spawn `rentcomp.app:app`
+ * directly under uvicorn — plus an identity check that is neither a status
+ * code nor a guessable version string: our own child process must still be
+ * alive AND its startup banner must name our port, checked before the first
+ * test and again after the last.
+ *
+ * This does not weaken D7's ("one command launches `rentcomp.app:app` on
+ * localhost:8000") coverage: `backend/tests/unit/test_scaffold_launch.py`
+ * already pins that `rentcomp`/`python -m rentcomp` calls
+ * `uvicorn.run("rentcomp.app:app", host="127.0.0.1", port=8000)` and that the
+ * `[project.scripts]` entry point is exactly that function — without ever
+ * binding a real socket (D21). What THIS file is actually about — a real
+ * `npm run build` output served correctly by the real ASGI app, real routing,
+ * real theme — needs the same app object on any port, not literally the
+ * console-script process. Same ASGI object either way, so nothing under test
+ * changes.
  */
 import { test, expect, type Page } from "@playwright/test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import net from "node:net";
 import path from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import {
-  REPO_ROOT,
-  VENV_RENTCOMP,
-  VENV_RENTCOMP_HINT,
-  NPM,
-  NPM_NEEDS_SHELL,
-} from "./support/local-server";
+import { REPO_ROOT, NPM, NPM_NEEDS_SHELL } from "./support/local-server";
 
 const FRONTEND_DIR = path.join(REPO_ROOT, "frontend");
 const FRONTEND_DIST = path.join(FRONTEND_DIR, "dist");
-const BASE_URL = "http://127.0.0.1:8000";
 
-test.describe.configure({ mode: "serial" });
+/** See WORKFLOW.md §2's third door — a worktree has no `.venv` of its own. */
+const VENV_DIR = process.env.RENTCOMP_VENV_DIR ?? path.join(REPO_ROOT, ".venv");
+const VENV_BIN = path.join(VENV_DIR, process.platform === "win32" ? "Scripts" : "bin");
+const VENV_PYTHON = path.join(VENV_BIN, process.platform === "win32" ? "python.exe" : "python");
+
+/** `pip install -e .` resolves against the MAIN checkout — without this a
+ * worktree run silently tests the wrong branch (WORKFLOW.md §2). */
+const BACKEND_SRC = path.join(REPO_ROOT, "backend", "src");
+
+/**
+ * NO `mode: "serial"` — removed under QUEUE row 44a (PM-authorised).
+ * `playwright.config.ts` already pins `workers: 1, fullyParallel: false`, so
+ * serial mode added nothing except "stop after the first failure"; nothing
+ * below depends on another test's state.
+ */
 
 let serverProcess: ChildProcess | null = null;
 let rentcompHome: string | null = null;
 let buildFailure: string | null = null;
+let BASE_URL = "";
+let serverPort = 0;
+let serverLog = "";
+
+/** A port nothing is listening on right now, chosen by the OS. */
+async function freePort(): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (typeof address === "string" || address === null) {
+        probe.close(() => reject(new Error("could not resolve an ephemeral port")));
+        return;
+      }
+      const { port } = address;
+      probe.close(() => resolve(port));
+    });
+  });
+}
 
 async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (serverProcess && serverProcess.exitCode !== null) return false; // died on bind
     try {
       const res = await fetch(url);
       if (res.status < 500) return true;
@@ -66,13 +120,34 @@ async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
   return false;
 }
 
+/** "The server answering us is the one we started" (WORKFLOW.md §2). */
+function serverIdentityProblem(): string | null {
+  if (!serverProcess) return "no server process was ever spawned";
+  if (serverProcess.exitCode !== null) {
+    return (
+      `the server we spawned exited with code ${serverProcess.exitCode}, yet ${BASE_URL} ` +
+      "answered — every result in this run is about a DIFFERENT agent's build " +
+      `(WORKFLOW.md §2, port contention). Server output:\n${serverLog.slice(-800)}`
+    );
+  }
+  if (!serverLog.includes(`:${serverPort}`)) {
+    return (
+      `the server we spawned never announced port ${serverPort}. Output so far:\n` +
+      serverLog.slice(-800)
+    );
+  }
+  return null;
+}
+
 test.beforeAll(async () => {
   if (!existsSync(FRONTEND_DIR)) {
     buildFailure = "frontend/ does not exist yet (F0-S1b not implemented)";
     return;
   }
-  if (!existsSync(VENV_RENTCOMP)) {
-    buildFailure = `${VENV_RENTCOMP_HINT} not found — expected \`pip install -e backend/\` (F0-S1a, already on main)`;
+  if (!existsSync(VENV_PYTHON)) {
+    buildFailure =
+      `${VENV_PYTHON} not found — expected the repo-root .venv, or RENTCOMP_VENV_DIR ` +
+      "pointing at it when running from a worktree (WORKFLOW.md §2)";
     return;
   }
 
@@ -92,21 +167,39 @@ test.beforeAll(async () => {
     return;
   }
 
+  serverPort = await freePort();
+  BASE_URL = `http://127.0.0.1:${serverPort}`;
   rentcompHome = mkdtempSync(path.join(tmpdir(), "rentcomp-f0s1b-home-"));
-  serverProcess = spawn(VENV_RENTCOMP, [], {
-    cwd: REPO_ROOT,
-    env: {
-      ...process.env,
-      RENTCOMP_HOME: rentcompHome,
-      RENTCOMP_LIVE: "", // never live (D17, WORKFLOW.md §6)
-    },
-    stdio: "pipe",
-  });
+
+  const env = { ...process.env } as NodeJS.ProcessEnv;
+  delete env.RENTCAST_API_KEY; // D17: a live call must be impossible, not unlikely
+  env.RENTCOMP_LIVE = "";
+  env.RENTCOMP_HOME = rentcompHome;
+  env.RENTCOMP_UI_DIR = FRONTEND_DIST; // serve the build this spec just made
+  env.PYTHONPATH = [BACKEND_SRC, process.env.PYTHONPATH]
+    .filter(Boolean)
+    .join(path.delimiter); // ';' on Windows — WORKFLOW.md §2
+
+  serverProcess = spawn(
+    VENV_PYTHON,
+    ["-m", "uvicorn", "rentcomp.app:app", "--host", "127.0.0.1", "--port", String(serverPort)],
+    { cwd: REPO_ROOT, env, stdio: "pipe" },
+  );
+  serverProcess.stdout?.on("data", (chunk) => (serverLog += chunk.toString()));
+  serverProcess.stderr?.on("data", (chunk) => (serverLog += chunk.toString()));
 
   const up = await waitForServer(`${BASE_URL}/openapi.json`, 20_000);
   if (!up) {
-    buildFailure = "rentcomp server did not come up on :8000 within 20s";
+    buildFailure = `server did not come up on ${BASE_URL} within 20s. Output:\n${serverLog.slice(-800)}`;
   }
+});
+
+test("the harness stood up a server of our own, on a port nobody else holds", () => {
+  expect(buildFailure, buildFailure ?? "").toBeNull();
+  expect(
+    serverIdentityProblem(),
+    "the server this spec is about to test is not the one it started",
+  ).toBeNull();
 });
 
 test.afterAll(() => {
@@ -233,4 +326,12 @@ test.describe("F0-S1b — dark monospace theme visibly applied", () => {
       `expected a monospace font family on <body>; got '${fontFamily}'`
     ).toMatch(/mono/);
   });
+});
+
+test("the server we tested against is still the one we started (checked again after the last test)", () => {
+  expect(
+    serverIdentityProblem(),
+    "the server identity changed partway through this run — everything above may have been " +
+      "answered by a different agent's build",
+  ).toBeNull();
 });

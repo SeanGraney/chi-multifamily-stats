@@ -10,6 +10,8 @@
 
 ⚠ **Budget at authorization: 42 remaining.** One end-to-end prediction costs **~7 calls** (2 per cohort year + 1 per extra 500 records), so this is **5–6 predictions before the cap**, and a repeat search with identical parameters costs **zero**. ⚠ **Per the agreed 13c mitigation: verify the first real pull reports `complete`, then copy `~/.rentcomp/` — restore beats re-buy.** Actual spend to be reconciled into this ledger after the pass.
 
+✅ **REVOKED SAME DAY — owner, 2026-08-03: *"now can you turn off test user api calls?"*** Server restarted with `RENTCOMP_LIVE` and `RENTCAST_API_KEY` **unset**, verified by reading `/proc/<pid>/environ` (0 matches), not inferred. **Ledger unchanged at 42 remaining — no evidence any live call was made during the window.** Re-authorization requires a fresh owner instruction and a new entry here.
+
 **Deadline: 7/29/2026** — the tool must be able to price a real unit by this date. Working beats pretty; see `PROJECT_MANAGER.md`'s "Deadline awareness."
 
 Owned by the project manager. Every dispatch/completion/reorder is an edit here, committed to main. States: `BLOCKED · READY · DISPATCHED · IN_DEV · IN_REVIEW · REGRESSION · DONE`.

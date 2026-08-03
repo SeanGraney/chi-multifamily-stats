@@ -39,11 +39,27 @@ const IS_WINDOWS = process.platform === "win32";
 export const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 /**
- * The `rentcomp` console script inside the repo-root `.venv`, which
- * CLAUDE.md pins as the project's only Python environment.
+ * The venv root — NOT always `REPO_ROOT`. An isolated worktree has no
+ * `.venv` of its own (CLAUDE.md: the repo-root one is the project's ONLY
+ * Python environment), so `f1-s2-recents.spec.ts` and
+ * `f5-s2-selection-weight.spec.ts` already resolve this inline as
+ * `process.env.RENTCOMP_VENV_DIR ?? REPO_ROOT`. This file — used by every
+ * OTHER live-server spec — did not, and that gap is what let
+ * `f0-s1b-integration`, `f2-s1-search-form` and `ws1-results-view` silently
+ * SKIP (not false-green; a genuine, honestly-reported skip) in a worktree
+ * with no `.venv` of its own, rather than fail loudly. Folded into row 44a
+ * 2026-08-03 as the actual root cause of that day's live-workspace incident:
+ * `f1-s2-recents` was the one spec that resolved the venv correctly AND had
+ * no port-8000 identity check, so it alone reached a real, wrong server.
+ * One-line fix — mirror what those two specs already do.
+ */
+const VENV_ROOT = process.env.RENTCOMP_VENV_DIR ?? REPO_ROOT;
+
+/**
+ * The `rentcomp` console script inside {@link VENV_ROOT}.
  */
 export const VENV_RENTCOMP = path.join(
-  REPO_ROOT,
+  VENV_ROOT,
   ".venv",
   IS_WINDOWS ? "Scripts" : "bin",
   IS_WINDOWS ? "rentcomp.exe" : "rentcomp",

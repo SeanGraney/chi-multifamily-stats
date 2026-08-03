@@ -53,6 +53,34 @@ Owned by the project manager. Every dispatch/completion/reorder is an edit here,
 
 ---
 
+## ⭐ F5-S1 — ACCEPTANCE CRITERIA (written into the queue 2026-08-03 by the PM, session 12)
+
+**Why this list exists at all:** F6-S1 burned **three QA agents** because its story text was one line of prose with no `AC:` anywhere, and each agent was asked to tabulate a list that did not exist (session 11 handoff). F5-S1's story text is the same shape — one dense paragraph. **QA tabulates this list; QA does not draft it.** If an AC here is wrong, QA says so and I amend the row — QA does not silently reinterpret it.
+
+**Owner scope ruling 2026-08-03: option (a), the FULL §6.4 row** — structured row + `$/sqft` + verify flag + cut-history line + stitch badge + expand panel + external links. The owner was told explicitly that this is **not** frontend-only (AC6 and AC9 are backend) and chose it anyway, on the reasoning that a prettier row that stays silent about the one comp most needing a warning is the wrong trade.
+
+| # | Acceptance criterion | Layer | Notes |
+|---|---|---|---|
+| **AC1** | The comp row renders as the **three-line structure** of spec §6.4, not today's single run-on string. Today it is a `<li>` holding one flat sentence (`Results.tsx:977`) | L3 | The mock in §6.4 is the contract |
+| **AC2** | **Line 1**: include toggle · address (+`unit`) · weight input · `contribution_share` · `initial_ask` | L3 | All already rendered today — this is a re-layout, do not regress F5-S2 |
+| **AC3** | **Line 2**: state · `beds`·`baths` · `sqft` · `distance_mi` · `cohort_year` · outcome. ⚠ **`beds`/`baths`/`sqft` are on the wire and rendered NOWHERE today** — the unit itself is currently invisible | L3 | `DerivedComp` already carries all six |
+| **AC4** | Outcome string per §6.4's four forms: `leased 34d` / `leased 12d ·provisional` / `removed 4d — classifying` / `active 45+ d` (amber), driven by `censored` + `removal_class` + `days_since_removal` | L3 | ⚠ `days_since_removal` ships as a **count, not a date**, deliberately (D5/D15). Do not subtract dates in the view |
+| **AC5** | **`$/sqft` on every row** from `psf`; a **missing-sqft badge** when `psf is null` | L3 | `psf` is server-computed; the view must never divide `initial_ask / sqft` (D5) |
+| **AC6** | ⭐ **`sqft_suspect` is COMPUTED SERVER-SIDE** — true when the comp's `psf` deviates **>~30%** from its cohort median `$/sqft`. It is hardcoded `False` today at `shape.py:822`, with `derive.py:412` carrying an explicit note that the test is unimplemented | **L1 + L2** | **This is the backend half of the story.** Belongs where the cohort median already exists (the F4-S5 premium stage), not in `shape.py`. `[DEFAULT]` on the exact threshold; `[INVARIANT]` on *what it means* |
+| **AC7** | ⭐⭐ **The named real-data case fires:** `2350 S Leavitt St 1R` — $4.28/sqft, +156.7%, 3bd/3ba in 700sqft — **raises the flag**. Measured by 9b's QA 2026-07-30 | **L1/L2 against `ws1-real`** | ⚠ **An implementation that does not flag this comp has not implemented the flag.** Do not "fix" 9b to exclude the comp — admitting the evidence is 9b's job, judging it is this story's |
+| **AC8** | The **verify-sqft badge** renders when `sqft_suspect` is true, and the **Zillow link is the verification path** it points at | L3 | A flag with no action attached is not the feature |
+| **AC9** | ⚠ **Cut-history line** `✂ 2,150 → 2,050 (day 21)` from `cut_history`. **CONTRACT GAP FOUND 2026-08-03: `Cut` (`responses.py:104`) carries only `on`/`from_price`/`to_price` — there is NO day-offset field, and computing "day 21" in the view is date arithmetic D15 keeps out of this codebase entirely.** QA to confirm; the fix is a server-side day-offset on `Cut`, exactly as `days_since_removal` was shipped as a count for this same reason. **Mechanism, verified 2026-08-03:** `PriceCut` (`domain.py:79`) holds `on: date`, and the anchor to subtract from is `StitchedComp.first_listed` (`domain.py:126`) — so `day_offset = (cut.on − first_listed).days`, computed in the pipeline. ⚠ **`first_listed` is `date \| None`**, and it is `None` on hand-built test comps — **the exact shape of the 10b trap**, so the offset must be `int \| None` and the row must render the cut without a day rather than printing `day nulld` | **L1 + L2 + L3** | **Second backend piece. Flag to me if QA disagrees — I would rather amend this row than have a dev invent a client-side date subtraction** |
+| **AC10** | **Stitch badge** `⟲ re-listed ×1 (6d gap)` from `relist_count` + `gap_days` | L3 | Both on the wire, neither rendered |
+| **AC11** | **Withdrawal-suspect badge** from `withdrawal_suspect` | L3 | On the wire, not rendered |
+| **AC12** | **Expand panel** → full detail + **Zillow deep link** (`zillow.com/homes/{address-slug}_rb/`) + **Google Street View link** built from `lat`/`lng` | L3 | §6.4: RentCast ships no photos or listing URLs, so these are the *only* visual-inspection path |
+| **AC13** | **ALL / NONE bulk toggles still work**, including ALL's existing rule that it selects only comps that have a `$/sqft` | L3 | F5-S2 regression — `Results.tsx:289` |
+| **AC14** | **F7-S1 filter behaviour preserved** — filtered comps leave the list, stay rust on the map, per-row INCLUDE in the footer | L3 | Cross-story regression; this row is what carries the toggle |
+| **AC15** | **D5/D13 hold**: the view renders server fields and formats them. No new computation, division, or date arithmetic in `Results.tsx` | review | PM runs `frontend-reviewer` **and** `backend-reviewer` — the subagents cannot spawn agents (SKILLS_MAP.md) |
+
+⚠ **Sequencing note for whoever dispatches this:** row **10b is DONE (merged 2026-07-31)**, so F5-S1 is genuinely unblocked — but 10b was *a contract trap aimed squarely at this story*. AC4 renders the pending row, and a frontend dev reading `responses.py`'s "`None` **iff** `removal_class` is `None`" will write `days_since_removal!` and be wrong on any pre-shaped synthetic fixture. **Read row 10b before writing AC4.**
+
+---
+
 ## ⭐ NEXT RELEASE — owner-scoped 2026-07-29 (session 10) — SUPERSEDED BY THE BLOCK ABOVE, kept for the reasoning it records
 
 **Owner’s words:** *"We are slowly moving towards the next release. We would like to be able to use the map and comp toggles, the cache, and accurate bucket numbers for the DOM."* Plus an explicit **"fix defects first."**

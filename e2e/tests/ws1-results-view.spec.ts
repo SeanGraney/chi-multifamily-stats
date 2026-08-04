@@ -401,11 +401,23 @@ test.describe("WS-1 — a real derive round-trips and Results renders real data"
       (res) => res.url().includes("/api/derive") && res.request().method() === "POST"
     );
     await gotoResults(page);
-    await derivePromise;
+    const deriveResponse = await derivePromise;
+
+    // row 47: this used to scan rendered body text for a `$1.00/sqft` string,
+    // meant to catch a leftover stub placeholder. Real ws1-real data legitimately
+    // contains a $1,000/mo over 1,000 sqft comp — an honest $1.00/sqft — which
+    // trips the regex on a coincidence, not a stub. The real signal is the
+    // response's own `warnings` list: a stub stage always self-reports via
+    // `DerivedWarning.code`, and the stub_stage family is fully retired (WS-1),
+    // so this now also proves the retirement holds rather than guessing from text.
+    const derived = await deriveResponse.json();
+    const stubWarnings = (derived.warnings ?? []).filter(
+      (w: { code: string }) => w.code === "stub_stage"
+    );
+    expect(stubWarnings).toEqual([]);
 
     const bodyText = await page.locator("body").innerText();
     expect(bodyText).not.toMatch(/placeholder/i);
-    expect(bodyText).not.toMatch(/\$1\.00\/sqft/);
   });
 });
 

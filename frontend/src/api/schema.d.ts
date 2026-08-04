@@ -268,6 +268,8 @@ export interface components {
       dollar_max: components["schemas"]["Band_float_"] | null;
       /** Count */
       count: number;
+      /** Leased Count */
+      leased_count: number;
       /** Leased Dom Median */
       leased_dom_median: number | null;
       /** Leased Dom Min */
@@ -276,6 +278,8 @@ export interface components {
       leased_dom_max: number | null;
       /** Cut Before Lease Rate */
       cut_before_lease_rate: number | null;
+      /** Thin */
+      thin: boolean;
       /** Provisional Count */
       provisional_count: number;
       /** Withdrawal Suspect Count */

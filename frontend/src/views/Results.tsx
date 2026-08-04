@@ -1334,6 +1334,40 @@ function ContributionCell({ share }: { share: number | null }) {
   );
 }
 
+/**
+ * Row 25a — a bucket's leased-outcome statistics disclose their own evidence
+ * count. `thin`/`leased_count` come straight from the server (D5/D13: this
+ * view never recomputes "is this thin" itself); disclosure, not suppression
+ * (F10-S1's row-26 precedent on this same panel) — the real statistic still
+ * renders, an amber+title caveat sits alongside it, reusing `ContributionCell`'s
+ * existing pattern (row 25a Ruling C) rather than inventing a second one.
+ */
+function LeasedStatCell({
+  bucket,
+  children,
+  showBadge,
+}: {
+  bucket: DerivedState["buckets"][number];
+  children: ReactNode;
+  showBadge: boolean;
+}) {
+  const caveat = bucket.thin
+    ? `Based on only ${bucket.leased_count} leased comp${bucket.leased_count === 1 ? "" : "s"} — thin evidence`
+    : undefined;
+  return (
+    <td className="pr-4">
+      <span
+        data-testid={bucket.thin && showBadge ? "bucket-thin-warning" : undefined}
+        title={caveat}
+        className={bucket.thin ? "text-amber font-bold" : undefined}
+      >
+        {children}
+        {bucket.thin && showBadge ? " ⚠" : ""}
+      </span>
+    </td>
+  );
+}
+
 function BucketTable({ buckets }: { buckets: DerivedState["buckets"] }) {
   return (
     <div className="mt-4">
@@ -1354,19 +1388,19 @@ function BucketTable({ buckets }: { buckets: DerivedState["buckets"] }) {
             <tr key={bucket.id}>
               <td className="pr-4">{bucket.id}</td>
               <td className="pr-4">{bucket.count}</td>
-              <td className="pr-4">
+              <LeasedStatCell bucket={bucket} showBadge>
                 {bucket.leased_dom_median === null ? "—" : `${bucket.leased_dom_median} days`}
-              </td>
-              <td className="pr-4">
+              </LeasedStatCell>
+              <LeasedStatCell bucket={bucket} showBadge={false}>
                 {bucket.leased_dom_min === null || bucket.leased_dom_max === null
                   ? "—"
                   : `${bucket.leased_dom_min}–${bucket.leased_dom_max} days`}
-              </td>
-              <td className="pr-4">
+              </LeasedStatCell>
+              <LeasedStatCell bucket={bucket} showBadge={false}>
                 {bucket.cut_before_lease_rate === null
                   ? "—"
                   : `${(bucket.cut_before_lease_rate * 100).toFixed(0)}%`}
-              </td>
+              </LeasedStatCell>
               <td className="pr-4">
                 {bucket.censored_floors.length === 0 ? "—" : bucket.censored_floors.join(", ")}
               </td>

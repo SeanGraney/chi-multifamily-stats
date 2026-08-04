@@ -189,7 +189,14 @@ def derive(req: DeriveRequest, ctx: DeriveContext) -> DerivedState:
         keys, psfs, years, weights, included, drift, req.subject.sqft, ctx.as_of.year
     )
     buckets = bucket_stats(
-        comps, keys, premiums, included, comp_buckets, anchor, cfg.bucket_half_width_pct
+        comps,
+        keys,
+        premiums,
+        included,
+        comp_buckets,
+        anchor,
+        cfg.bucket_half_width_pct,
+        cfg.min_cohort_size,
     )
     price = price_test(
         req.candidate_rent,

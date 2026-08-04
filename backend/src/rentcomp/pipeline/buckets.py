@@ -28,6 +28,22 @@ and censored comps are never counted as leased (their DOM-so-far is a floor,
 reported separately in `censored_floors`). An empty leased set reports
 `None` on every outcome statistic — never `0`/`0.0`, which would read as a
 real computed value for zero evidence.
+
+WHAT ROW 25a ADDS — the per-cell evidence gate
+------------------------------------------------
+The bucket table renders unconditionally, with no gate of its own (F5-S3's
+>=5-included gate answers a different question, about the ANALYSIS button,
+not this panel — QUEUE.md row 25a). `leased_count` and `thin` disclose how
+much evidence actually sits behind the four leased-outcome statistics above:
+`thin` is true when `leased_count` is nonzero but below `min_cohort_size`
+(reused from F4-S5's cohort-thinness knob, same comparison direction —
+strictly `<`, so a bucket with exactly `min_cohort_size` leased comps is at
+the minimum, not below it). A leased_count of 0 is the pre-existing empty
+case (every statistic already `None`) and is deliberately NOT flagged thin —
+"thin" names sparse-but-real evidence, not the absence of any evidence at
+all (PM Ruling A, disclosure not suppression: the four statistics keep their
+real values when `thin` is true; the view adds a warning, it never hides
+the numbers).
 """
 
 from __future__ import annotations
@@ -91,6 +107,7 @@ def bucket_stats(
     buckets: Sequence[BucketId | None],
     anchor_value: Anchor | None,
     half_width_pct: float,
+    min_cohort_size: int,
 ) -> list[BucketStat]:
     """One `BucketStat` per bucket, always three, in render order.
 
@@ -111,6 +128,13 @@ def bucket_stats(
         premium_min, premium_max = premium_bounds(bucket_id, half_width_pct)
         leased = [comp for comp, _ in members if comp.removal_class in _LEASED_CLASSES]
         leased_doms = sorted(comp.effective_dom for comp in leased)
+        leased_count = len(leased)
+        # Strictly `<`, and only for a NONZERO count: an empty leased set is
+        # the pre-existing "no evidence at all" case (every statistic below
+        # already `None`) and is not additionally "thin" — that word is
+        # reserved for sparse-but-real evidence (module docstring, PM
+        # Ruling A).
+        thin = 0 < leased_count < min_cohort_size
         stats.append(
             BucketStat(
                 id=bucket_id,
@@ -119,6 +143,7 @@ def bucket_stats(
                 dollar_min=_dollars(anchor_value, premium_min),
                 dollar_max=_dollars(anchor_value, premium_max),
                 count=len(member_keys),
+                leased_count=leased_count,
                 leased_dom_median=float(median(leased_doms)) if leased_doms else None,
                 leased_dom_min=leased_doms[0] if leased_doms else None,
                 leased_dom_max=leased_doms[-1] if leased_doms else None,
@@ -127,6 +152,7 @@ def bucket_stats(
                     if leased
                     else None
                 ),
+                thin=thin,
                 provisional_count=sum(
                     1 for comp, _ in members if comp.removal_class == "provisional"
                 ),

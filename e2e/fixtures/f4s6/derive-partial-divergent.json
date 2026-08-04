@@ -435,7 +435,9 @@
       "comp_keys": [
         "400 w wood st|",
         "401 w wood st|"
-      ]
+      ],
+      "leased_count": 2,
+      "thin": true
     },
     {
       "id": "at",
@@ -467,7 +469,9 @@
         "406 w wood st|",
         "410 w wood st|",
         "411 w wood st|"
-      ]
+      ],
+      "leased_count": 7,
+      "thin": false
     },
     {
       "id": "above",
@@ -491,7 +495,9 @@
         "407 w wood st|",
         "408 w wood st|",
         "409 w wood st|"
-      ]
+      ],
+      "leased_count": 3,
+      "thin": true
     }
   ],
   "price_test": {

@@ -222,7 +222,7 @@ def _stats(comps):
     keys = [f"k{i}" for i in range(len(comps))]
     premiums: list[float | None] = [0.0] * len(comps)  # everything lands "at market"
     buckets = [bucket_of(p, 4.0) for p in premiums]
-    stats = bucket_stats(comps, keys, premiums, [True] * len(comps), buckets, None, 4.0)
+    stats = bucket_stats(comps, keys, premiums, [True] * len(comps), buckets, None, 4.0, 4)
     return {s.id: s for s in stats}["at"]
 
 

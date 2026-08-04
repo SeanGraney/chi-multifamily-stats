@@ -280,10 +280,27 @@ class BucketStat(BaseModel):
     dollar_max: Band[float] | None
 
     count: int
+    #: The size of the LEASED set (`removal_class in ("provisional",
+    #: "confirmed")`) that `leased_dom_median`/`min`/`max`/
+    #: `cut_before_lease_rate` are all computed over — distinct from `count`,
+    #: which is the bucket's total membership. Row 25a: the per-cell evidence
+    #: gate counts THIS, not `count` and not the search's total included
+    #: comps (PM Ruling 2, QUEUE.md row 25a).
+    leased_count: int
     leased_dom_median: float | None
     leased_dom_min: int | None
     leased_dom_max: int | None
     cut_before_lease_rate: float | None
+    #: True when `leased_count` is below the evidence threshold
+    #: (`min_cohort_size`, row 25a Ruling B) for the four leased-outcome
+    #: statistics above to be shown without a caveat. Disclosure, not
+    #: suppression: even when `thin` is True, the statistics above still
+    #: report their real values — the view renders a warning ALONGSIDE them,
+    #: never a blank/guard state instead (F10-S1's row-26 precedent on this
+    #: same panel). Only meaningful on a non-empty leased set; an empty
+    #: leased set already reports `None` on every statistic above and is not
+    #: additionally "thin" — it has no evidence at all, not sparse evidence.
+    thin: bool
     provisional_count: int
     withdrawal_suspect_count: int
     #: DOM-so-far of the censored comps in this bucket: floors, not outcomes,

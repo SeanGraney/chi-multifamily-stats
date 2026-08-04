@@ -324,7 +324,7 @@ def test_bucket_counts_and_evidence_cannot_disagree() -> None:
     keys = list("abc")
     premiums = [-0.10, 0.0, 0.20]
     buckets = [bucket_of(premium, 4.0) for premium in premiums]
-    stats = bucket_stats(comps, keys, premiums, [True] * 3, buckets, None, 4.0)
+    stats = bucket_stats(comps, keys, premiums, [True] * 3, buckets, None, 4.0, 4)
     assert [stat.id for stat in stats] == list(BUCKET_IDS)
     for stat in stats:
         assert stat.count == len(stat.comp_keys)
@@ -336,13 +336,13 @@ def test_bucket_counts_and_evidence_cannot_disagree() -> None:
 
 def test_an_excluded_comp_populates_no_bucket() -> None:
     stats = bucket_stats(
-        [make_comp("A")], ["a"], [0.0], [False], ["at"], None, 4.0
+        [make_comp("A")], ["a"], [0.0], [False], ["at"], None, 4.0, 4
     )
     assert all(stat.count == 0 for stat in stats)
 
 
 def test_bucket_dollar_boundaries_are_absent_without_an_anchor() -> None:
-    stats = bucket_stats([], [], [], [], [], None, 4.0)
+    stats = bucket_stats([], [], [], [], [], None, 4.0, 4)
     assert all(stat.dollar_min is None and stat.dollar_max is None for stat in stats)
 
 
@@ -354,7 +354,7 @@ def test_bucket_dollar_boundaries_track_the_anchor_band() -> None:
         ["a"], [2.0], [2026], [1.0], [True], drift_band(7.0, DRIFT_SENSITIVITY_PTS), 1000.0, 2026
     )
     assert anchor_value is not None
-    stats = bucket_stats([], [], [], [], [], anchor_value, 4.0)
+    stats = bucket_stats([], [], [], [], [], anchor_value, 4.0, 4)
     at_bucket = next(stat for stat in stats if stat.id == "at")
     assert at_bucket.dollar_min is not None and at_bucket.dollar_max is not None
     assert at_bucket.dollar_min.mid == pytest.approx(anchor_value.rent.mid * 0.96)

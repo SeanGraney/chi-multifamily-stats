@@ -55,7 +55,7 @@ def _stats_for(comps: list[StitchedComp], half_width_pct: float = 4.0):
     premiums: list[float | None] = [0.0] * len(comps)  # every comp lands "at market"
     buckets = [bucket_of(p, half_width_pct) for p in premiums]
     included = [True] * len(comps)
-    stats = bucket_stats(comps, keys, premiums, included, buckets, None, half_width_pct)
+    stats = bucket_stats(comps, keys, premiums, included, buckets, None, half_width_pct, 4)
     return {s.id: s for s in stats}
 
 

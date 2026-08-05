@@ -76,14 +76,13 @@ IN_RANGE_DISTANCE = 0.03
 #: neighbors is "too few".
 MIN_USABLE_IN_RANGE = 3
 
-#: WS-1a's provisional `reason="curve_not_available"` retires here. It named
+#: WS-1a's provisional `reason="curve_not_available"` retired here. It named
 #: one specific gap — F11-S3's real trip rule did not fire, so the guard had
 #: no honest reason to state, and there was no `CurveResult` to return
-#: instead. F11-S2 supplies the missing arm: when no edge trips, this module
-#: now returns a real curve. The literal is still in `GuardResult.reason`'s
-#: `Literal` (retiring it is a wire-contract change, and QA's
-#: `test_derivation_graph.py` pins the current set) but it is unreachable
-#: from this module — flagged for F11-S3 to remove along with the codegen.
+#: instead. F11-S2 supplied the missing arm: when no edge trips, this module
+#: returns a real curve, so nothing in this module has emitted the value
+#: since. F11-S3 removed the now-unreachable literal from `GuardResult.reason`
+#: in `models/responses.py` and regenerated the TS codegen to match.
 
 
 def candidate_premium_band(candidate_rent: float, anchor_value: Anchor) -> Band[float]:

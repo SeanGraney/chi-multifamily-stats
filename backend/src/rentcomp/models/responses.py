@@ -400,17 +400,11 @@ class GuardResult(BaseModel):
     candidate_rent: float
     candidate_premium: Band[float]
     bucket: BucketId
-    #: WS-1a: `curve_not_available` was a provisional third value, not an
-    #: F11-S3 trip reason. It named the one state the wire contract could not
-    #: express — F11-S3's real trip rule did not fire, but there was no
-    #: `CurveResult` to return either, because F11-S2 did not exist.
-    #:
-    #: **F11-S2 has landed and nothing produces this value any more.** The
-    #: literal is still here only because removing it is a wire-contract
-    #: change that regenerates the TS types (D12); F11-S3 retires it along
-    #: with the codegen when it takes ownership of the trip thresholds.
-    #: Nothing may start emitting it again.
-    reason: Literal["too_few_in_range", "all_censored", "curve_not_available"]
+    #: WS-1a's provisional `curve_not_available` value is retired as of
+    #: F11-S3: F11-S2 landed the real curve/guard branch selection, so
+    #: nothing has emitted this value since, and now the wire contract
+    #: itself no longer names it as a possibility.
+    reason: Literal["too_few_in_range", "all_censored"]
     neighbors: list[Neighbor]
 
 

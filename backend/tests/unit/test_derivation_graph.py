@@ -326,16 +326,28 @@ def test_a_curve_result_and_a_guard_result_cannot_be_confused() -> None:
     assert "curve" in CurveResult.model_fields, "CurveResult must carry the curve"
     assert literal_values(CurveResult.model_fields["state"].annotation) == {"curve"}
     assert literal_values(GuardResult.model_fields["state"].annotation) == {"insufficient_evidence"}
+    # F11-S3 QA EDIT (2026-08-05): this assertion previously required
+    # `curve_not_available` as a third value, with this exact docstring
+    # predicting its own expiry — "retires when F11-S2/F11-S3's guard-vs-curve
+    # branch selection lands for real." F11-S2 landed it (curve branch exists,
+    # `test_f11s2_curve_reaches_derive.py::test_curve_not_available_is_never_
+    # returned` already proves nothing emits it at runtime); F11-S3 is the
+    # story that owns retiring it from the wire TYPE, not just proving it
+    # dead. Tightening (removing an allowed literal), not weakening — the
+    # only way this can go RED is if the type still names a value nothing may
+    # ever emit again. Flagged to the developer (via the PM): this requires
+    # an actual code change — drop `"curve_not_available"` from
+    # `GuardResult.reason`'s `Literal` in `models/responses.py`, then
+    # regenerate `frontend/src/api/schema.d.ts` (`npm run codegen` against
+    # the running server, per D12 — never hand-edit the generated file).
     assert literal_values(GuardResult.model_fields["reason"].annotation) == {
         "too_few_in_range",
         "all_censored",
-        "curve_not_available",
     }, (
-        "the two guard reasons of spec §5.4, plus WS-1a's provisional third value "
-        "(PM ruling, QUEUE.md row 6a: 'evidence is sufficient but no curve exists yet', "
-        "since F11-S2 does not exist — retires when F11-S2/F11-S3's guard-vs-curve branch "
-        "selection lands for real) — not a spec change, an honesty fix for a wire contract "
-        "with no truthful value to report in that state"
+        "GuardResult.reason still names 'curve_not_available' in its Literal. "
+        "F11-S2 retired every runtime path that could emit it; F11-S3 retires "
+        "it from the wire contract itself. Remove it from the Literal in "
+        "models/responses.py and regenerate frontend/src/api/schema.d.ts."
     )
 
 
